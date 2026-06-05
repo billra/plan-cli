@@ -1,0 +1,51 @@
+Plan.py Test Suite
+==================
+
+Initial State
+-------------
+The file should start empty.
+    >>> test_file.exists()
+    False
+
+Adding Tasks
+------------
+We can add a hierarchy in a single atomic command. Because we capture stdout,
+it should return completely silently.
+    >>> cmd("1", "Grandparent", "1.1", "Parent", "1.1.1", "Child")
+
+Reading Tasks
+-------------
+Running the script with no arguments (empty cmd) should print the whole file.
+    >>> cmd()
+    ☐ 1 "Grandparent"
+    ☐ 1.1 "Parent"
+    ☐ 1.1.1 "Child"
+
+Printing a specific subtree:
+    >>> cmd("1.1")
+    ☐ 1.1 "Parent"
+    ☐ 1.1.1 "Child"
+
+Mutating Tasks (Completeness)
+-----------------------------
+Completing the bottom-most child should bubble up and complete the ancestors.
+    >>> cmd("complete", "1.1.1")
+
+Check the output to ensure the bubbles worked:
+    >>> cmd()
+    ☒ 1 "Grandparent"
+    ☒ 1.1 "Parent"
+    ☒ 1.1.1 "Child"
+
+Incompleting the parent should cascade down AND bubble up:
+    >>> cmd("incomplete", "1.1")
+    >>> cmd()
+    ☐ 1 "Grandparent"
+    ☐ 1.1 "Parent"
+    ☐ 1.1.1 "Child"
+
+Error Handling
+--------------
+What happens if we try to create a sibling gap? The UsageError should be caught safely.
+    >>> cmd("insert", "1.3", "Wait, where is 1.2?")
+    ValidationError: sibling gap - expected 1.2
