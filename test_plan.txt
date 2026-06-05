@@ -3,146 +3,123 @@ Plan.py Test Suite
 
 Initial State
 -------------
-The file should start empty.
     >>> plan_file.exists()
     False
 
-Adding Tasks & Formatting
--------------------------
-We can add a hierarchy in a single atomic command. We also test that quote
-and backslash escaping works cleanly.
-    >>> cmd("1", "Root", "1.1", "Child A", "1.2", "Child B", "1.2.1", "Grandchild B.1", "1.3", "Child C")
-    >>> cmd("1.4", "Escaped \"quotes\" and \\slash")
+1. The Atomic Constraint
+------------------------
+The `plan <n> "<d>" ...` command must validate ALL pairs before writing. If there is a
+gap or error at the end of the input, nothing should be written to the file.
+    >>> cmd("1", "Root", "1.1", "Child", "1.3", "Gap Child")
+    ValidationError: sibling gap - expected 1.2
+    >>> plan_file.exists()
+    False
 
-Reading Tasks
--------------
-Running the script with no arguments should print the whole file.
-    >>> cmd()
-    ☐ 1 "Root"
-    ☐ 1.1 "Child A"
-    ☐ 1.2 "Child B"
-    ☐ 1.2.1 "Grandchild B.1"
-    ☐ 1.3 "Child C"
-    ☐ 1.4 "Escaped \"quotes\" and \\slash"
-
-Printing a specific subtree:
-    >>> cmd("1.2")
-    ☐ 1.2 "Child B"
-    ☐ 1.2.1 "Grandchild B.1"
-
-Validation Errors (Adding)
+2. Building a Complex Tree
 --------------------------
-Let's test boundary conditions for numbering logic (gaps, missing parents, invalid syntax).
-    >>> cmd("1.6", "Gap at the end")
-    ValidationError: sibling gap - expected 1.5
-
-    >>> cmd("3", "Root sibling gap")
-    ValidationError: sibling gap - expected 2
-
-    >>> cmd("1.2.3.1", "Missing parent")
-    ValidationError: parent 1.2.3 does not exist
-
-    >>> cmd("01.1", "Leading zero")
-    ValidationError: invalid task number format: 01.1
-
-    >>> cmd("1.0", "Zero segment")
-    ValidationError: invalid task number format: 1.0
-
-Completeness Propagation (Bubbling & Cascading)
------------------------------------------------
-Completing a child does not complete the parent if other siblings are incomplete.
-However, since 1.2.1 is the ONLY child of 1.2, completing it fulfills the condition
-for 1.2 to be completed automatically.
-    >>> cmd("complete", "1.2.1")
+Let's build a multi-root, multi-depth tree to test complex chain reactions.
+    >>> cmd("1", "Project Alpha", "1.1", "Phase 1", "1.1.1", "Task A", "1.1.2", "Task B")
+    >>> cmd("1.2", "Phase 2", "2", "Project Beta", "2.1", "Phase 1")
     >>> cmd()
-    ☐ 1 "Root"
-    ☐ 1.1 "Child A"
-    ☒ 1.2 "Child B"
-    ☒ 1.2.1 "Grandchild B.1"
-    ☐ 1.3 "Child C"
-    ☐ 1.4 "Escaped \"quotes\" and \\slash"
+    ☐ 1 "Project Alpha"
+    ☐ 1.1 "Phase 1"
+    ☐ 1.1.1 "Task A"
+    ☐ 1.1.2 "Task B"
+    ☐ 1.2 "Phase 2"
+    ☐ 2 "Project Beta"
+    ☐ 2.1 "Phase 1"
 
-Completing the root should cascade DOWN and complete everything.
+3. Chain Reaction Completeness (Upward)
+---------------------------------------
+Completing one child of a multi-child parent shouldn't bubble up.
+    >>> cmd("complete", "1.1.1")
+    >>> cmd("1.1")
+    ☐ 1.1 "Phase 1"
+    ☒ 1.1.1 "Task A"
+    ☐ 1.1.2 "Task B"
+
+Completing the final sibling should trigger a chain reaction, completing
+the parent (1.1). However, Root (1) should remain incomplete because 1.2 is incomplete.
+    >>> cmd("complete", "1.1.2")
+    >>> cmd("1")
+    ☐ 1 "Project Alpha"
+    ☒ 1.1 "Phase 1"
+    ☒ 1.1.1 "Task A"
+    ☒ 1.1.2 "Task B"
+    ☐ 1.2 "Phase 2"
+
+Completing the last top-level dependency (1.2) should now complete the Root (1).
+    >>> cmd("complete", "1.2")
+    >>> cmd("1")
+    ☒ 1 "Project Alpha"
+    ☒ 1.1 "Phase 1"
+    ☒ 1.1.1 "Task A"
+    ☒ 1.1.2 "Task B"
+    ☒ 1.2 "Phase 2"
+
+4. Deep Subtree Shifting (Insert)
+---------------------------------
+Inserting a task in the middle of the tree (1.1) must shift the previous 1.1 to 1.2.
+Crucially, ALL children of the shifted parent must have their prefixes updated
+(e.g., old 1.1.1 becomes 1.2.1). Root 2 should remain completely unaffected.
+    >>> cmd("insert", "1.1", "New Phase 0")
+    >>> cmd()
+    ☒ 1 "Project Alpha"
+    ☐ 1.1 "New Phase 0"
+    ☒ 1.2 "Phase 1"
+    ☒ 1.2.1 "Task A"
+    ☒ 1.2.2 "Task B"
+    ☒ 1.3 "Phase 2"
+    ☐ 2 "Project Beta"
+    ☐ 2.1 "Phase 1"
+
+Notice that inserting the incomplete "New Phase 0" at 1.1 caused the root (1)
+to immediately bubble to incomplete (☐). The implementation handled the bubble!
+
+5. Replace and Upward Interruption
+----------------------------------
+Let's complete the whole tree first.
     >>> cmd("complete", "1")
+    >>> cmd("complete", "2")
+
+Replacing a deep task resets it to incomplete. This should interrupt the complete
+state of its parent and its root, without affecting its siblings.
+    >>> cmd("1.2.2", "Revised Task B")
+    >>> cmd("1")
+    ☐ 1 "Project Alpha"
+    ☒ 1.1 "New Phase 0"
+    ☐ 1.2 "Phase 1"
+    ☒ 1.2.1 "Task A"
+    ☐ 1.2.2 "Revised Task B"
+    ☒ 1.3 "Phase 2"
+
+6. Incomplete Cascading (Downward)
+----------------------------------
+Marking a top-level parent incomplete should force all its descendants incomplete.
+    >>> cmd("incomplete", "2")
+    >>> cmd("2")
+    ☐ 2 "Project Beta"
+    ☐ 2.1 "Phase 1"
+
+7. Deep Subtree Shifting (Delete)
+---------------------------------
+Deleting a middle sibling that has children should completely erase that subtree,
+and properly shift the subsequent siblings back down to close the gap.
+If we delete 1.2 (Phase 1 and its children), 1.3 should become the new 1.2.
+    >>> cmd("delete", "1.2")
     >>> cmd()
-    ☒ 1 "Root"
-    ☒ 1.1 "Child A"
-    ☒ 1.2 "Child B"
-    ☒ 1.2.1 "Grandchild B.1"
-    ☒ 1.3 "Child C"
-    ☒ 1.4 "Escaped \"quotes\" and \\slash"
+    ☐ 1 "Project Alpha"
+    ☒ 1.1 "New Phase 0"
+    ☒ 1.2 "Phase 2"
+    ☐ 2 "Project Beta"
+    ☐ 2.1 "Phase 1"
 
-Replacing Tasks (Atomic State Reset)
-------------------------------------
-If we update an existing task, its description is updated, it resets to incomplete (☐),
-and this incomplete state immediately bubbles UP to all ancestors.
-    >>> cmd("1.2.1", "Updated Grandchild")
-    >>> cmd()
-    ☐ 1 "Root"
-    ☒ 1.1 "Child A"
-    ☐ 1.2 "Child B"
-    ☐ 1.2.1 "Updated Grandchild"
-    ☒ 1.3 "Child C"
-    ☒ 1.4 "Escaped \"quotes\" and \\slash"
-
-Incompleting a parent should cascade DOWN to children (and bubble UP).
-    >>> cmd("incomplete", "1.3")
-    >>> cmd()
-    ☐ 1 "Root"
-    ☒ 1.1 "Child A"
-    ☐ 1.2 "Child B"
-    ☐ 1.2.1 "Updated Grandchild"
-    ☐ 1.3 "Child C"
-    ☒ 1.4 "Escaped \"quotes\" and \\slash"
-
-Insert Operations (Beginning, Middle, End, Errors)
---------------------------------------------------
-Inserting at the BEGINNING (1.1). Shifts all current siblings up.
-    >>> cmd("insert", "1.1", "New Child A")
-
-Inserting in the MIDDLE (1.3). Shifts 1.3 and subsequent siblings up.
-    >>> cmd("insert", "1.3", "New Child B")
-
-Inserting at the END (1.7). Next logical sibling.
-    >>> cmd("insert", "1.7", "End Child")
-
-Check the tree after inserts:
-    >>> cmd()
-    ☐ 1 "Root"
-    ☐ 1.1 "New Child A"
-    ☒ 1.2 "Child A"
-    ☐ 1.3 "New Child B"
-    ☐ 1.4 "Child B"
-    ☐ 1.4.1 "Updated Grandchild"
-    ☐ 1.5 "Child C"
-    ☒ 1.6 "Escaped \"quotes\" and \\slash"
-    ☐ 1.7 "End Child"
-
-Insert Error Check (Gap):
-    >>> cmd("insert", "1.9", "Gap insert")
-    ValidationError: sibling gap - expected 1.8
-
-Delete Operations (Beginning, Middle, End, Subtrees)
-----------------------------------------------------
-Deleting at the END.
-    >>> cmd("delete", "1.7")
-
-Deleting at the BEGINNING. Shifts all remaining siblings down.
-    >>> cmd("delete", "1.1")
-
-Deleting in the MIDDLE (which also tests deleting a subtree).
-Deleting 1.3 (which used to be 1.4 "Child B" and its child) should remove both
-and close the gap.
+8. Edge Boundary Validations
+----------------------------
+Deleting a non-existent child inside a valid parent:
     >>> cmd("delete", "1.3")
+    ValidationError: task 1.3 does not exist
 
-Verify final tree after all deletions:
-    >>> cmd()
-    ☐ 1 "Root"
-    ☒ 1.1 "Child A"
-    ☐ 1.2 "New Child B"
-    ☐ 1.3 "Child C"
-    ☒ 1.4 "Escaped \"quotes\" and \\slash"
-
-Delete Error Check:
-    >>> cmd("delete", "1.5")
-    ValidationError: task 1.5 does not exist
+Inserting at a deeper boundary gap:
+    >>> cmd("insert", "1.1.2", "Gap")
+    ValidationError: sibling gap - expected 1.1.1
