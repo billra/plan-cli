@@ -2,8 +2,6 @@
 import doctest
 import tempfile
 import sys
-import io
-from contextlib import redirect_stdout
 from pathlib import Path
 import plan
 
@@ -14,25 +12,13 @@ def run_tests():
     temp_dir = tempfile.TemporaryDirectory()
     test_file = Path(temp_dir.name) / "plan.txt"
 
-    # 2. Advanced helper to catch stdout AND errors
+    # 2. Simplified helper to catch errors (doctest naturally intercepts stdout)
     def cmd(*args):
-        """Runs commands, catches errors, and intercepts stdout cleanly."""
-        f = io.StringIO()
+        """Runs commands and catches errors for doctest to see."""
         try:
-            # Capture any print() statements inside dispatch
-            with redirect_stdout(f):
-                plan.dispatch(test_file, list(args))
-        except plan.ValidationError as e:
-            print(f"ValidationError: {e}")
-            return
-        except plan.UsageError as e:
-            print(f"UsageError: {e}")
-            return
-
-        # Output the captured text so doctest can verify it
-        output = f.getvalue().strip()
-        if output:
-            print(output)
+            plan.dispatch(test_file, list(args))
+        except (plan.ValidationError, plan.UsageError) as e:
+            print(f"{type(e).__name__}: {e}")
 
     # 3. Inject our tools
     extraglobs = {

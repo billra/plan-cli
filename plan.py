@@ -26,11 +26,6 @@ class UsageError(Exception):
 class ValidationError(Exception):
     """Raised for invalid data state (gaps, missing parents, invalid numbers)."""
 
-def abort(code, message):
-    """Prints an error to stderr and exits with the specified code."""
-    print(f"error: {message}", file=sys.stderr)
-    sys.exit(code)
-
 
 # --- Helper Functions ---
 def parse_num(num_str):
@@ -57,8 +52,6 @@ def is_child(child, parent):
 
 # --- Core Data Models ---
 class Task:
-    __slots__ = ('num', 'desc', 'is_complete')
-
     def __init__(self, num, desc, is_complete=False):
         self.num = num
         self.desc = desc
@@ -82,14 +75,8 @@ class PlanManager:
 
     def __init__(self, plan_file):
         self.plan_file = plan_file
-        self.tasks = []
-        self.task_map = {}
+        self.tasks = {}
         self.load()
-
-    def _rebuild_map(self):
-        """Sorts tasks ascendingly and rebuilds the fast-lookup dictionary."""
-        self.tasks.sort(key=lambda t: t.num)
-        self.task_map = {t.num: t for t in self.tasks}
 
     def load(self):
         """Reads the plan file and parses lines into Task objects."""
@@ -98,8 +85,8 @@ class PlanManager:
 
         try:
             content = self.plan_file.read_text(encoding='utf-8')
-        except OSError:
-            abort(EXIT_IO, f"unable to read file {self.plan_file}")
+        except OSError as e:
+            raise OSError(f"unable to read file {self.plan_file}") from e
 
         pattern = re.compile(rf'^({CHECK_INCOMPLETE}|{CHECK_COMPLETE}) ([\d\.]+) "(.*)"$')
 
@@ -109,24 +96,24 @@ class PlanManager:
 
             match = pattern.match(line)
             if not match:
-                abort(EXIT_IO, f"malformed line {line_idx} in plan.txt")
+                raise OSError(f"malformed line {line_idx} in plan.txt")
 
             box, num_str, raw_desc = match.groups()
             num = parse_num(num_str)
             desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\')
 
-            self.tasks.append(Task(num, desc, is_complete=(box == CHECK_COMPLETE)))
+            self.tasks[num] = Task(num, desc, is_complete=(box == CHECK_COMPLETE))
 
-        self._rebuild_map()
+        self.tasks = dict(sorted(self.tasks.items()))
 
     def save(self):
         """Validates the state and flushes atomically to disk."""
         self.validate()
         try:
-            lines = [t.to_line() for t in self.tasks]
+            lines = [t.to_line() for t in self.tasks.values()]
             self.plan_file.write_text(''.join(lines), encoding='utf-8')
-        except OSError:
-            abort(EXIT_IO, f"unable to write to file {self.plan_file}")
+        except OSError as e:
+            raise OSError(f"unable to write to file {self.plan_file}") from e
 
     def validate(self):
         """
@@ -138,35 +125,35 @@ class PlanManager:
         if not self.tasks:
             return
 
-        if (1,) not in self.task_map:
+        if (1,) not in self.tasks:
             raise ValidationError("blank slate must start at 1")
 
-        for t in self.tasks:
-            parent = t.num[:-1]
+        for num, t in self.tasks.items():
+            parent = num[:-1]
 
             # Ensure parent exists
-            if parent and parent not in self.task_map:
+            if parent and parent not in self.tasks:
                 raise ValidationError(f"parent {format_num(parent)} does not exist")
 
             # Ensure consecutive sequence (no gaps)
-            if t.num[-1] > 1:
-                prev_sibling = parent + (t.num[-1] - 1,)
-                if prev_sibling not in self.task_map:
+            if num[-1] > 1:
+                prev_sibling = parent + (num[-1] - 1,)
+                if prev_sibling not in self.tasks:
                     raise ValidationError(f"sibling gap - expected {format_num(prev_sibling)}")
 
     # --- Print Operations ---
     def print_all(self):
         """Prints the entire file."""
-        for t in self.tasks:
+        for t in self.tasks.values():
             print(t)
 
     def print_subtree(self, num_str):
         """Prints a specific node and its descendants."""
         num = parse_num(num_str)
-        if num not in self.task_map:
+        if num not in self.tasks:
             raise ValidationError(f"task {num_str} does not exist")
 
-        for t in self.tasks:
+        for t in self.tasks.values():
             if t.num == num or is_descendant(t.num, num):
                 print(t)
 
@@ -174,16 +161,16 @@ class PlanManager:
     def _propagate_complete(self, num):
         """Propagates completeness down (all descendants) and up (ancestors if criteria met)."""
         # Propagate down
-        for t in self.tasks:
+        for t in self.tasks.values():
             if t.num == num or is_descendant(t.num, num):
                 t.is_complete = True
 
         # Propagate up
         parent = num[:-1]
         while parent:
-            children = [t for t in self.tasks if is_child(t.num, parent)]
+            children = [t for t in self.tasks.values() if is_child(t.num, parent)]
             if all(c.is_complete for c in children):
-                self.task_map[parent].is_complete = True
+                self.tasks[parent].is_complete = True
                 parent = parent[:-1]
             else:
                 break
@@ -191,26 +178,26 @@ class PlanManager:
     def _propagate_incomplete(self, num):
         """Propagates incompleteness down (all descendants) and up (all ancestors unconditionally)."""
         # Propagate down
-        for t in self.tasks:
+        for t in self.tasks.values():
             if t.num == num or is_descendant(t.num, num):
                 t.is_complete = False
 
         # Propagate up
         parent = num[:-1]
         while parent:
-            self.task_map[parent].is_complete = False
+            self.tasks[parent].is_complete = False
             parent = parent[:-1]
 
     # --- Command Implementations ---
     def complete(self, num_str):
         num = parse_num(num_str)
-        if num not in self.task_map:
+        if num not in self.tasks:
             raise ValidationError(f"task {num_str} does not exist")
         self._propagate_complete(num)
 
     def incomplete(self, num_str):
         num = parse_num(num_str)
-        if num not in self.task_map:
+        if num not in self.tasks:
             raise ValidationError(f"task {num_str} does not exist")
         self._propagate_incomplete(num)
 
@@ -218,18 +205,16 @@ class PlanManager:
         """Adds or replaces tasks atomically based on pairs of [number, description]."""
         for num_str, desc in pairs:
             num = parse_num(num_str)
-            if num in self.task_map:
+            if num in self.tasks:
                 # Replace existing, reset state, and bubble up
-                t = self.task_map[num]
+                t = self.tasks[num]
                 t.desc = desc
                 self._propagate_incomplete(num)
             else:
                 # Add new
-                new_task = Task(num, desc)
-                self.tasks.append(new_task)
-                self.task_map[num] = new_task
+                self.tasks[num] = Task(num, desc)
 
-        self._rebuild_map()
+        self.tasks = dict(sorted(self.tasks.items()))
 
     def insert(self, num_str, desc):
         """Inserts a task at <n>, shifting existing and subsequent siblings right by 1."""
@@ -237,38 +222,52 @@ class PlanManager:
         parent = num[:-1]
         target_idx = num[-1]
 
-        # Shift relevant siblings and their subtrees
-        for t in self.tasks:
-            if t.num[:len(parent)] == parent and len(t.num) >= len(num):
-                if t.num[len(parent)] >= target_idx:
-                    shifted_num = list(t.num)
-                    shifted_num[len(parent)] += 1
-                    t.num = tuple(shifted_num)
+        # Find keys to shift. Process in reverse order to avoid overwriting keys as they shift right.
+        keys_to_shift = sorted([
+            k for k in self.tasks
+            if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] >= target_idx
+        ], reverse=True)
 
-        self.tasks.append(Task(num, desc))
-        self._rebuild_map()
+        for k in keys_to_shift:
+            shifted_k = list(k)
+            shifted_k[len(parent)] += 1
+            shifted_k = tuple(shifted_k)
+
+            t = self.tasks.pop(k)
+            t.num = shifted_k
+            self.tasks[shifted_k] = t
+
+        self.tasks[num] = Task(num, desc)
+        self.tasks = dict(sorted(self.tasks.items()))
 
     def delete(self, num_str):
         """Deletes <n> + descendants, shifting subsequent siblings left by 1."""
         num = parse_num(num_str)
-        if num not in self.task_map:
+        if num not in self.tasks:
             raise ValidationError(f"task {num_str} does not exist")
 
         # Filter out the node and its subtree
-        self.tasks = [t for t in self.tasks if t.num != num and not is_descendant(t.num, num)]
+        self.tasks = {k: v for k, v in self.tasks.items() if not (k == num or is_descendant(k, num))}
 
-        # Shift subsequent siblings left
         parent = num[:-1]
         target_idx = num[-1]
 
-        for t in self.tasks:
-            if t.num[:len(parent)] == parent and len(t.num) >= len(num):
-                if t.num[len(parent)] > target_idx:
-                    shifted_num = list(t.num)
-                    shifted_num[len(parent)] -= 1
-                    t.num = tuple(shifted_num)
+        # Find keys to shift. Process in standard ascending order to avoid overwriting keys as they shift left.
+        keys_to_shift = sorted([
+            k for k in self.tasks
+            if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] > target_idx
+        ])
 
-        self._rebuild_map()
+        for k in keys_to_shift:
+            shifted_k = list(k)
+            shifted_k[len(parent)] -= 1
+            shifted_k = tuple(shifted_k)
+
+            t = self.tasks.pop(k)
+            t.num = shifted_k
+            self.tasks[shifted_k] = t
+
+        self.tasks = dict(sorted(self.tasks.items()))
 
 
 # --- CLI Setup & Help Text ---
@@ -284,14 +283,14 @@ Hierarchy:
   • Gaps are invalid at all times. Sibling sets must be consecutive.
 
 Commands:
-  plan                      → Print entire file
-  plan <n>                  → Print <n> and its descendants
-  plan <n> "<d>" ...        → Add/replace each pair. Atomic. Resets replacements to incomplete.
-  plan complete <n>         → Mark <n> + descendants complete. Bubbles up to complete ancestors if all siblings complete.
-  plan incomplete <n>       → Mark <n> + descendants incomplete. Bubbles up, making all ancestors incomplete.
-  plan insert <n> "<d>"     → Insert task at <n>. Existing <n> and following siblings shift right (+1).
-  plan delete <n>           → Delete <n> + descendants. Following siblings shift left (-1).
-  plan --help               → Print this spec synopsis
+  plan                    → Print entire file
+  plan <n>                → Print <n> and its descendants
+  plan <n> "<d>" ...      → Add/replace each pair. Atomic. Resets replacements to incomplete.
+  plan complete <n>       → Mark <n> + descendants complete. Bubbles up to complete ancestors if all siblings complete.
+  plan incomplete <n>     → Mark <n> + descendants incomplete. Bubbles up, making all ancestors incomplete.
+  plan insert <n> "<d>"   → Insert task at <n>. Existing <n> and following siblings shift right (+1).
+  plan delete <n>         → Delete <n> + descendants. Following siblings shift left (-1).
+  plan --help             → Print this spec synopsis
 """
 
 def dispatch(plan_file, args):
@@ -342,7 +341,7 @@ def main():
     except ValidationError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(EXIT_VALIDATION)
-    except Exception as e:
+    except OSError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(EXIT_IO)
 
