@@ -4,7 +4,7 @@ Plan.py Test Suite
 Initial State
 -------------
 The file should start empty.
-    >>> test_file.exists()
+    >>> plan_file.exists()
     False
 
 Adding Tasks

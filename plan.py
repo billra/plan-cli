@@ -7,16 +7,18 @@ Maintains an ordered, tree-like structure of tasks in ~/plan.txt.
 import sys
 import re
 from pathlib import Path
+from enum import IntEnum
 
 # --- Constants & Configuration ---
 CHECK_INCOMPLETE = '☐'
 CHECK_COMPLETE = '☒'
 
-# Exit codes
-EXIT_SUCCESS = 0
-EXIT_USAGE = 1
-EXIT_VALIDATION = 2
-EXIT_IO = 3
+
+class ExitCode(IntEnum):
+    SUCCESS = 0
+    USAGE = 1
+    VALIDATION = 2
+    IO = 3
 
 
 # --- Error Handling ---
@@ -29,10 +31,7 @@ class ValidationError(Exception):
 
 # --- Helper Functions ---
 def parse_num(num_str):
-    """
-    Validates and converts a string number (e.g., '1.2.10') into a tuple of ints.
-    Enforces positive integers and no leading zeros.
-    """
+    """Validates and converts a string number (e.g., '1.2.10') into a tuple of ints."""
     if not re.match(r'^[1-9]\d*(?:\.[1-9]\d*)*$', num_str):
         raise ValidationError(f"invalid task number format: {num_str}")
     return tuple(int(x) for x in num_str.split('.'))
@@ -40,10 +39,6 @@ def parse_num(num_str):
 def format_num(num_tuple):
     """Converts a tuple of ints back to a string."""
     return '.'.join(str(x) for x in num_tuple)
-
-def is_descendant(child, parent):
-    """Returns True if 'child' is a descendant of 'parent' in the hierarchy."""
-    return len(child) > len(parent) and child[:len(parent)] == parent
 
 def is_child(child, parent):
     """Returns True if 'child' is an immediate child of 'parent'."""
@@ -60,12 +55,10 @@ class Task:
     def to_line(self):
         """Serializes the task to the strict file format."""
         box = CHECK_COMPLETE if self.is_complete else CHECK_INCOMPLETE
-        num_str = format_num(self.num)
         desc_esc = self.desc.replace('\\', '\\\\').replace('"', '\\"')
-        return f'{box} {num_str} "{desc_esc}"\n'
+        return f'{box} {format_num(self.num)} "{desc_esc}"\n'
 
     def __str__(self):
-        """Console-friendly representation (same as file format without newline)."""
         return self.to_line().rstrip('\n')
 
 
@@ -101,7 +94,6 @@ class PlanManager:
             box, num_str, raw_desc = match.groups()
             num = parse_num(num_str)
             desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\')
-
             self.tasks[num] = Task(num, desc, is_complete=(box == CHECK_COMPLETE))
 
         self.tasks = dict(sorted(self.tasks.items()))
@@ -116,26 +108,18 @@ class PlanManager:
             raise OSError(f"unable to write to file {self.plan_file}") from e
 
     def validate(self):
-        """
-        Enforces specification rules:
-        - Blank slates start at 1.
-        - No sibling gaps (segments must be strictly consecutive).
-        - Parents must exist.
-        """
+        """Enforces specification rules."""
         if not self.tasks:
             return
 
         if (1,) not in self.tasks:
             raise ValidationError("blank slate must start at 1")
 
-        for num, t in self.tasks.items():
+        for num in self.tasks:
             parent = num[:-1]
-
-            # Ensure parent exists
             if parent and parent not in self.tasks:
                 raise ValidationError(f"parent {format_num(parent)} does not exist")
 
-            # Ensure consecutive sequence (no gaps)
             if num[-1] > 1:
                 prev_sibling = parent + (num[-1] - 1,)
                 if prev_sibling not in self.tasks:
@@ -154,7 +138,7 @@ class PlanManager:
             raise ValidationError(f"task {num_str} does not exist")
 
         for t in self.tasks.values():
-            if t.num == num or is_descendant(t.num, num):
+            if t.num[:len(num)] == num:
                 print(t)
 
     # --- Bubble & Propagation Rules ---
@@ -162,7 +146,7 @@ class PlanManager:
         """Propagates completeness down (all descendants) and up (ancestors if criteria met)."""
         # Propagate down
         for t in self.tasks.values():
-            if t.num == num or is_descendant(t.num, num):
+            if t.num[:len(num)] == num:
                 t.is_complete = True
 
         # Propagate up
@@ -179,7 +163,7 @@ class PlanManager:
         """Propagates incompleteness down (all descendants) and up (all ancestors unconditionally)."""
         # Propagate down
         for t in self.tasks.values():
-            if t.num == num or is_descendant(t.num, num):
+            if t.num[:len(num)] == num:
                 t.is_complete = False
 
         # Propagate up
@@ -206,12 +190,9 @@ class PlanManager:
         for num_str, desc in pairs:
             num = parse_num(num_str)
             if num in self.tasks:
-                # Replace existing, reset state, and bubble up
-                t = self.tasks[num]
-                t.desc = desc
+                self.tasks[num].desc = desc
                 self._propagate_incomplete(num)
             else:
-                # Add new
                 self.tasks[num] = Task(num, desc)
 
         self.tasks = dict(sorted(self.tasks.items()))
@@ -222,20 +203,15 @@ class PlanManager:
         parent = num[:-1]
         target_idx = num[-1]
 
-        # Find keys to shift. Process in reverse order to avoid overwriting keys as they shift right.
-        keys_to_shift = sorted([
-            k for k in self.tasks
-            if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] >= target_idx
-        ], reverse=True)
+        keys_to_shift = sorted(
+            (k for k in self.tasks if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] >= target_idx),
+            reverse=True
+        )
 
         for k in keys_to_shift:
-            shifted_k = list(k)
-            shifted_k[len(parent)] += 1
-            shifted_k = tuple(shifted_k)
-
-            t = self.tasks.pop(k)
-            t.num = shifted_k
-            self.tasks[shifted_k] = t
+            shifted_k = k[:len(parent)] + (k[len(parent)] + 1,) + k[len(parent)+1:]
+            self.tasks[shifted_k] = self.tasks.pop(k)
+            self.tasks[shifted_k].num = shifted_k
 
         self.tasks[num] = Task(num, desc)
         self.tasks = dict(sorted(self.tasks.items()))
@@ -246,26 +222,18 @@ class PlanManager:
         if num not in self.tasks:
             raise ValidationError(f"task {num_str} does not exist")
 
-        # Filter out the node and its subtree
-        self.tasks = {k: v for k, v in self.tasks.items() if not (k == num or is_descendant(k, num))}
-
+        self.tasks = {k: v for k, v in self.tasks.items() if k[:len(num)] != num}
         parent = num[:-1]
         target_idx = num[-1]
 
-        # Find keys to shift. Process in standard ascending order to avoid overwriting keys as they shift left.
-        keys_to_shift = sorted([
-            k for k in self.tasks
-            if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] > target_idx
-        ])
+        keys_to_shift = sorted(
+            k for k in self.tasks if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] > target_idx
+        )
 
         for k in keys_to_shift:
-            shifted_k = list(k)
-            shifted_k[len(parent)] -= 1
-            shifted_k = tuple(shifted_k)
-
-            t = self.tasks.pop(k)
-            t.num = shifted_k
-            self.tasks[shifted_k] = t
+            shifted_k = k[:len(parent)] + (k[len(parent)] - 1,) + k[len(parent)+1:]
+            self.tasks[shifted_k] = self.tasks.pop(k)
+            self.tasks[shifted_k].num = shifted_k
 
         self.tasks = dict(sorted(self.tasks.items()))
 
@@ -294,38 +262,30 @@ Commands:
 """
 
 def dispatch(plan_file, args):
-    """Takes the target file and a list of arguments (like sys.argv[1:])."""
+    """Takes the target file and a list of arguments."""
     manager = PlanManager(plan_file)
 
     match args:
         case []:
             manager.print_all()
             return
-
         case ["--help"]:
             print(HELP_TEXT, end="")
             return
-
         case ["complete", n]:
             manager.complete(n)
-
         case ["incomplete", n]:
             manager.incomplete(n)
-
         case ["insert", n, desc]:
             manager.insert(n, desc)
-
         case ["delete", n]:
             manager.delete(n)
-
         case [n] if '.' in n or n.isdigit():
             manager.print_subtree(n)
             return
-
-        case args if len(args) >= 2 and len(args) % 2 == 0:
+        case _ if len(args) >= 2 and len(args) % 2 == 0:
             pairs = list(zip(args[0::2], args[1::2]))
             manager.add_or_replace(pairs)
-
         case _:
             raise UsageError("unrecognized command or invalid arguments")
 
@@ -333,17 +293,20 @@ def dispatch(plan_file, args):
 
 def main():
     """The CLI entry point handles all sys interactions."""
+    plan_file = Path('~/plan.txt').expanduser()
+    args = sys.argv[1:]
+
     try:
-        dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
+        dispatch(plan_file, args)
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(EXIT_USAGE)
+        sys.exit(ExitCode.USAGE)
     except ValidationError as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(EXIT_VALIDATION)
+        sys.exit(ExitCode.VALIDATION)
     except OSError as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(EXIT_IO)
+        sys.exit(ExitCode.IO)
 
 if __name__ == "__main__":
     main()
