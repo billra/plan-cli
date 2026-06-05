@@ -294,53 +294,57 @@ Commands:
   plan --help               → Print this spec synopsis
 """
 
-def dispatch(plan_file):
+def dispatch(plan_file, args):
+    """Takes the target file and a list of arguments (like sys.argv[1:])."""
     manager = PlanManager(plan_file)
 
-    try:
-        match sys.argv[1:]:
-            case []:
-                manager.print_all()
-                sys.exit(EXIT_SUCCESS)
+    match args:
+        case []:
+            manager.print_all()
+            return
 
-            case ["--help"]:
-                print(HELP_TEXT, end="")
-                sys.exit(EXIT_SUCCESS)
+        case ["--help"]:
+            print(HELP_TEXT, end="")
+            return
 
-            case ["complete", n]:
-                manager.complete(n)
+        case ["complete", n]:
+            manager.complete(n)
 
-            case ["incomplete", n]:
-                manager.incomplete(n)
+        case ["incomplete", n]:
+            manager.incomplete(n)
 
-            case ["insert", n, desc]:
-                manager.insert(n, desc)
+        case ["insert", n, desc]:
+            manager.insert(n, desc)
 
-            case ["delete", n]:
-                manager.delete(n)
+        case ["delete", n]:
+            manager.delete(n)
 
-            case [n] if '.' in n or n.isdigit():
-                manager.print_subtree(n)
-                sys.exit(EXIT_SUCCESS)
+        case [n] if '.' in n or n.isdigit():
+            manager.print_subtree(n)
+            return
 
-            case args if len(args) >= 2 and len(args) % 2 == 0:
-                pairs = list(zip(args[0::2], args[1::2]))
-                manager.add_or_replace(pairs)
+        case args if len(args) >= 2 and len(args) % 2 == 0:
+            pairs = list(zip(args[0::2], args[1::2]))
+            manager.add_or_replace(pairs)
 
-            case _:
-                raise UsageError("unrecognized command or invalid arguments")
+        case _:
+            raise UsageError("unrecognized command or invalid arguments")
 
-        # Atomic validate & write for any mutating command
-        manager.save()
-
-    except UsageError as e:
-        abort(EXIT_USAGE, str(e))
-    except ValidationError as e:
-        abort(EXIT_VALIDATION, str(e))
+    manager.save()
 
 def main():
-    """Default entry point for normal execution."""
-    dispatch(Path('~/plan.txt').expanduser())
+    """The CLI entry point handles all sys interactions."""
+    try:
+        dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(EXIT_USAGE)
+    except ValidationError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(EXIT_VALIDATION)
+    except Exception as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(EXIT_IO)
 
 if __name__ == "__main__":
     main()
