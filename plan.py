@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 
 # --- Constants & Configuration ---
-PLAN_FILE = Path('~/plan.txt').expanduser()
 CHECK_INCOMPLETE = '☐'
 CHECK_COMPLETE = '☒'
 
@@ -81,7 +80,8 @@ class Task:
 class PlanManager:
     """Handles the state, mutations, and file I/O for the plan hierarchy."""
 
-    def __init__(self):
+    def __init__(self, plan_file):
+        self.plan_file = plan_file
         self.tasks = []
         self.task_map = {}
         self.load()
@@ -92,14 +92,14 @@ class PlanManager:
         self.task_map = {t.num: t for t in self.tasks}
 
     def load(self):
-        """Reads ~/plan.txt and parses lines into Task objects."""
-        if not PLAN_FILE.exists():
+        """Reads the plan file and parses lines into Task objects."""
+        if not self.plan_file.exists():
             return
 
         try:
-            content = PLAN_FILE.read_text(encoding='utf-8')
+            content = self.plan_file.read_text(encoding='utf-8')
         except OSError:
-            abort(EXIT_IO, f"unable to read file {PLAN_FILE}")
+            abort(EXIT_IO, f"unable to read file {self.plan_file}")
 
         pattern = re.compile(rf'^({CHECK_INCOMPLETE}|{CHECK_COMPLETE}) ([\d\.]+) "(.*)"$')
 
@@ -124,9 +124,9 @@ class PlanManager:
         self.validate()
         try:
             lines = [t.to_line() for t in self.tasks]
-            PLAN_FILE.write_text(''.join(lines), encoding='utf-8')
+            self.plan_file.write_text(''.join(lines), encoding='utf-8')
         except OSError:
-            abort(EXIT_IO, f"unable to write to file {PLAN_FILE}")
+            abort(EXIT_IO, f"unable to write to file {self.plan_file}")
 
     def validate(self):
         """
@@ -294,8 +294,8 @@ Commands:
   plan --help               → Print this spec synopsis
 """
 
-def main():
-    manager = PlanManager()
+def dispatch(plan_file):
+    manager = PlanManager(plan_file)
 
     try:
         match sys.argv[1:]:
@@ -338,6 +338,9 @@ def main():
     except ValidationError as e:
         abort(EXIT_VALIDATION, str(e))
 
+def main():
+    """Default entry point for normal execution."""
+    dispatch(Path('~/plan.txt').expanduser())
 
 if __name__ == "__main__":
     main()
