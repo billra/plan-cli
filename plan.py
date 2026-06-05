@@ -187,15 +187,24 @@ class PlanManager:
 
     def add_or_replace(self, pairs):
         """Adds or replaces tasks atomically based on pairs of [number, description]."""
+        affected_nums = []
+
+        # Phase 1: Stage Mutations
         for num_str, desc in pairs:
             num = parse_num(num_str)
             if num in self.tasks:
                 self.tasks[num].desc = desc
-                self._propagate_incomplete(num)
             else:
                 self.tasks[num] = Task(num, desc)
+            affected_nums.append(num)
 
+        # Phase 2: Enforce Consistency
         self.tasks = dict(sorted(self.tasks.items()))
+        self.validate()
+
+        # Phase 3: Trigger Side-Effects Safely
+        for num in affected_nums:
+            self._propagate_incomplete(num)
 
     def insert(self, num_str, desc):
         """Inserts a task at <n>, shifting existing and subsequent siblings right by 1."""
@@ -203,6 +212,7 @@ class PlanManager:
         parent = num[:-1]
         target_idx = num[-1]
 
+        # Phase 1: Stage Mutations (Shift and Insert)
         keys_to_shift = sorted(
             (k for k in self.tasks if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] >= target_idx),
             reverse=True
@@ -214,7 +224,13 @@ class PlanManager:
             self.tasks[shifted_k].num = shifted_k
 
         self.tasks[num] = Task(num, desc)
+
+        # Phase 2: Enforce Consistency
         self.tasks = dict(sorted(self.tasks.items()))
+        self.validate()
+
+        # Phase 3: Trigger Side-Effects Safely
+        self._propagate_incomplete(num)
 
     def delete(self, num_str):
         """Deletes <n> + descendants, shifting subsequent siblings left by 1."""
@@ -235,7 +251,9 @@ class PlanManager:
             self.tasks[shifted_k] = self.tasks.pop(k)
             self.tasks[shifted_k].num = shifted_k
 
+        # Enforce consistency after deletion shifts
         self.tasks = dict(sorted(self.tasks.items()))
+        self.validate()
 
 
 # --- CLI Setup & Help Text ---

@@ -1,125 +1,155 @@
 Plan.py Test Suite
 ==================
 
-Initial State
--------------
+Initial State & The Blank Slate
+-------------------------------
+The file starts empty.
     >>> plan_file.exists()
     False
 
-1. The Atomic Constraint
-------------------------
-The `plan <n> "<d>" ...` command must validate ALL pairs before writing. If there is a
-gap or error at the end of the input, nothing should be written to the file.
-    >>> cmd("1", "Root", "1.1", "Child", "1.3", "Gap Child")
+The application enforces that the root must begin at 1.
+    >>> cmd("2", "Invalid Root")
+    ValidationError: blank slate must start at 1
+
+    >>> cmd("insert", "1", "First Root")
+    >>> cmd()
+    ☐ 1 "First Root"
+
+Deleting the only task should safely return us to an empty state.
+    >>> cmd("delete", "1")
+    >>> cmd()
+
+Atomic Addition & Order Independence
+------------------------------------
+Because `add_or_replace` sorts pairs before saving, we should be able to
+define a valid tree in a completely random order, and it will construct properly.
+    >>> cmd("1.1.1", "Leaf", "1", "Root", "1.1", "Branch")
+    >>> cmd()
+    ☐ 1 "Root"
+    ☐ 1.1 "Branch"
+    ☐ 1.1.1 "Leaf"
+
+Adding a task missing its immediate parent fails validation.
+    >>> cmd("1.2.1", "Orphan")
+    ValidationError: parent 1.2 does not exist
+
+Adding a task that skips a sibling index fails validation.
+    >>> cmd("1.3", "Skipper")
     ValidationError: sibling gap - expected 1.2
-    >>> plan_file.exists()
-    False
 
-2. Building a Complex Tree
---------------------------
-Let's build a multi-root, multi-depth tree to test complex chain reactions.
-    >>> cmd("1", "Project Alpha", "1.1", "Phase 1", "1.1.1", "Task A", "1.1.2", "Task B")
-    >>> cmd("1.2", "Phase 2", "2", "Project Beta", "2.1", "Phase 1")
-    >>> cmd()
-    ☐ 1 "Project Alpha"
-    ☐ 1.1 "Phase 1"
-    ☐ 1.1.1 "Task A"
-    ☐ 1.1.2 "Task B"
-    ☐ 1.2 "Phase 2"
-    ☐ 2 "Project Beta"
-    ☐ 2.1 "Phase 1"
-
-3. Chain Reaction Completeness (Upward)
----------------------------------------
-Completing one child of a multi-child parent shouldn't bubble up.
-    >>> cmd("complete", "1.1.1")
-    >>> cmd("1.1")
-    ☐ 1.1 "Phase 1"
-    ☒ 1.1.1 "Task A"
-    ☐ 1.1.2 "Task B"
-
-Completing the final sibling should trigger a chain reaction, completing
-the parent (1.1). However, Root (1) should remain incomplete because 1.2 is incomplete.
-    >>> cmd("complete", "1.1.2")
-    >>> cmd("1")
-    ☐ 1 "Project Alpha"
-    ☒ 1.1 "Phase 1"
-    ☒ 1.1.1 "Task A"
-    ☒ 1.1.2 "Task B"
-    ☐ 1.2 "Phase 2"
-
-Completing the last top-level dependency (1.2) should now complete the Root (1).
-    >>> cmd("complete", "1.2")
-    >>> cmd("1")
-    ☒ 1 "Project Alpha"
-    ☒ 1.1 "Phase 1"
-    ☒ 1.1.1 "Task A"
-    ☒ 1.1.2 "Task B"
-    ☒ 1.2 "Phase 2"
-
-4. Deep Subtree Shifting (Insert)
----------------------------------
-Inserting a task in the middle of the tree (1.1) must shift the previous 1.1 to 1.2.
-Crucially, ALL children of the shifted parent must have their prefixes updated
-(e.g., old 1.1.1 becomes 1.2.1). Root 2 should remain completely unaffected.
-    >>> cmd("insert", "1.1", "New Phase 0")
-    >>> cmd()
-    ☒ 1 "Project Alpha"
-    ☐ 1.1 "New Phase 0"
-    ☒ 1.2 "Phase 1"
-    ☒ 1.2.1 "Task A"
-    ☒ 1.2.2 "Task B"
-    ☒ 1.3 "Phase 2"
-    ☐ 2 "Project Beta"
-    ☐ 2.1 "Phase 1"
-
-Notice that inserting the incomplete "New Phase 0" at 1.1 caused the root (1)
-to immediately bubble to incomplete (☐). The implementation handled the bubble!
-
-5. Replace and Upward Interruption
-----------------------------------
-Let's complete the whole tree first.
+Idempotency & Replacement State Resets
+--------------------------------------
+Let's complete the entire tree.
     >>> cmd("complete", "1")
-    >>> cmd("complete", "2")
-
-Replacing a deep task resets it to incomplete. This should interrupt the complete
-state of its parent and its root, without affecting its siblings.
-    >>> cmd("1.2.2", "Revised Task B")
     >>> cmd("1")
-    ☐ 1 "Project Alpha"
-    ☒ 1.1 "New Phase 0"
-    ☐ 1.2 "Phase 1"
-    ☒ 1.2.1 "Task A"
-    ☐ 1.2.2 "Revised Task B"
-    ☒ 1.3 "Phase 2"
+    ☒ 1 "Root"
+    ☒ 1.1 "Branch"
+    ☒ 1.1.1 "Leaf"
 
-6. Incomplete Cascading (Downward)
+Completing an already complete task should be idempotent (no-op, no crash).
+    >>> cmd("complete", "1.1.1")
+    >>> cmd("1.1.1")
+    ☒ 1.1.1 "Leaf"
+
+Replacing an existing task updates its description AND forces its state to incomplete.
+Because of propagation, this must also bubble up and incomplete its ancestors.
+    >>> cmd("1.1.1", "Updated Leaf")
+    >>> cmd("1")
+    ☐ 1 "Root"
+    ☐ 1.1 "Branch"
+    ☐ 1.1.1 "Updated Leaf"
+
+Adding a new child to a completed parent must also incomplete the parent!
+Let's complete it all again, then add 1.1.2.
+    >>> cmd("complete", "1")
+    >>> cmd("1.1.2", "New Sibling")
+    >>> cmd("1")
+    ☐ 1 "Root"
+    ☐ 1.1 "Branch"
+    ☒ 1.1.1 "Updated Leaf"
+    ☐ 1.1.2 "New Sibling"
+
+Deep Shifting Constraints (Insert)
 ----------------------------------
-Marking a top-level parent incomplete should force all its descendants incomplete.
+Inserting at the root pushes EVERYTHING down, and changes all prefixes.
+    >>> cmd("insert", "1", "New Root")
+    >>> cmd()
+    ☐ 1 "New Root"
+    ☐ 2 "Root"
+    ☐ 2.1 "Branch"
+    ☒ 2.1.1 "Updated Leaf"
+    ☐ 2.1.2 "New Sibling"
+
+Inserting into a deep node shifts its siblings right (+1) and updates their children.
+Let's insert at 2.1.1. The old 2.1.1 and 2.1.2 should become 2.1.2 and 2.1.3.
+    >>> cmd("insert", "2.1.1", "Inserted Leaf")
+    >>> cmd("2.1")
+    ☐ 2.1 "Branch"
+    ☐ 2.1.1 "Inserted Leaf"
+    ☒ 2.1.2 "Updated Leaf"
+    ☐ 2.1.3 "New Sibling"
+
+Deep Shifting Constraints (Delete)
+----------------------------------
+Deleting a middle node pulls subsequent siblings left (-1).
+Deleting 2.1.2 should shift 2.1.3 down to 2.1.2.
+    >>> cmd("delete", "2.1.2")
+    >>> cmd("2.1")
+    ☐ 2.1 "Branch"
+    ☐ 2.1.1 "Inserted Leaf"
+    ☐ 2.1.2 "New Sibling"
+
+Deleting a parent wipes out its children entirely.
+    >>> cmd("delete", "2.1")
+    >>> cmd("2")
+    ☐ 2 "Root"
+
+Downward Cascading Constraints
+------------------------------
+Marking a parent incomplete must aggressively force all descendants to incomplete.
+Let's build out a small completed tree first.
+    >>> cmd("2.1", "A", "2.1.1", "B", "2.1.2", "C")
+    >>> cmd("complete", "2")
+    >>> cmd("2")
+    ☒ 2 "Root"
+    ☒ 2.1 "A"
+    ☒ 2.1.1 "B"
+    ☒ 2.1.2 "C"
+
+Now incomplete the top level node. Everything underneath must become incomplete.
     >>> cmd("incomplete", "2")
     >>> cmd("2")
-    ☐ 2 "Project Beta"
-    ☐ 2.1 "Phase 1"
+    ☐ 2 "Root"
+    ☐ 2.1 "A"
+    ☐ 2.1.1 "B"
+    ☐ 2.1.2 "C"
 
-7. Deep Subtree Shifting (Delete)
----------------------------------
-Deleting a middle sibling that has children should completely erase that subtree,
-and properly shift the subsequent siblings back down to close the gap.
-If we delete 1.2 (Phase 1 and its children), 1.3 should become the new 1.2.
-    >>> cmd("delete", "1.2")
-    >>> cmd()
-    ☐ 1 "Project Alpha"
-    ☒ 1.1 "New Phase 0"
-    ☒ 1.2 "Phase 2"
-    ☐ 2 "Project Beta"
-    ☐ 2.1 "Phase 1"
+Invalid Number Parsing
+----------------------
+The `parse_num` regex requires strict dot-separated integers.
+    >>> cmd("delete", "1.")
+    ValidationError: invalid task number format: 1.
 
-8. Edge Boundary Validations
-----------------------------
-Deleting a non-existent child inside a valid parent:
-    >>> cmd("delete", "1.3")
-    ValidationError: task 1.3 does not exist
+    >>> cmd("delete", ".1")
+    ValidationError: invalid task number format: .1
 
-Inserting at a deeper boundary gap:
-    >>> cmd("insert", "1.1.2", "Gap")
-    ValidationError: sibling gap - expected 1.1.1
+    >>> cmd("delete", "1..1")
+    ValidationError: invalid task number format: 1..1
+
+    >>> cmd("delete", "A.1")
+    ValidationError: invalid task number format: A.1
+
+Target Missing Errors
+---------------------
+Attempting to operate on non-existent targets safely throws validation errors.
+    >>> cmd("complete", "9.9")
+    ValidationError: task 9.9 does not exist
+
+    >>> cmd("incomplete", "9.9")
+    ValidationError: task 9.9 does not exist
+
+    >>> cmd("delete", "9.9")
+    ValidationError: task 9.9 does not exist
+
+    >>> cmd("9.9")
+    ValidationError: task 9.9 does not exist
