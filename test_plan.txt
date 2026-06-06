@@ -189,6 +189,42 @@ Attempting to operate on non-existent targets safely throws validation errors.
     >>> cmd("9.9")
     ValidationError: task 9.9 does not exist
 
+CLI Usage & Argument Validation
+-------------------------------
+Providing unrecognized commands, or the wrong number of arguments for strict commands, raises a UsageError.
+    >>> cmd("dance")
+    UsageError: unrecognized command or invalid arguments
+
+    >>> cmd("insert", "1")
+    UsageError: unrecognized command or invalid arguments
+
+    >>> cmd("1", "Desc", "2")
+    UsageError: unrecognized command or invalid arguments
+
+Strict Number Formatting (No Leading Zeros)
+-------------------------------------------
+The numbering strictly prohibits leading zeros at any level of the hierarchy to prevent ambiguity.
+    >>> cmd("01", "Leading Zero")
+    ValidationError: invalid task number format: 01
+
+    >>> cmd("1.02", "Inner Leading Zero")
+    ValidationError: invalid task number format: 1.02
+
+File Parsing Resilience (Empty Lines & Corruption)
+--------------------------------------------------
+The tool safely ignores empty lines in the storage file. We can test this by writing directly to the underlying file.
+    >>> _ = plan_file.write_text("\n\n☐ 1 \"Surviving Task\"\n\n\n", encoding="utf-8")
+    >>> cmd()
+    ☐ 1 "Surviving Task"
+
+If a user manually corrupts the file with malformed text, the tool completely aborts. It throws an I/O error to prevent the application from overwriting and destroying the user's data.
+    >>> _ = plan_file.write_text("☐ 1 Missing Quotes Around Description\n", encoding="utf-8")
+    >>> cmd()
+    OSError: malformed line 1 in plan.txt
+
+Let's delete the corrupted file so the application resets to a blank slate for the final test.
+    >>> plan_file.unlink()
+
 Help Command
 ------------
 The help command outputs the tool specification.

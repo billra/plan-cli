@@ -16,10 +16,10 @@
 - Continuity: Gaps are strictly invalid at all times, including the root level. An empty file must begin with task `1`. Within any sibling set, segments must be strictly consecutive (e.g., `1.1`, `1.2`, `1.3`).
 - Tree Shifting: When a task's number shifts due to insertion or deletion, its entire subtree shifts uniformly. For example, if task `1.2` is renumbered to `1.3`, its child `1.2.1` becomes `1.3.1`.
 
-## Bubble Rules (State Propagation)
+## Bubble Rules
 
-- Marking Complete (☒): Propagates *down* (all descendants become complete) and *up* (ancestors become complete only if every one of their children is now complete).
-- Marking Incomplete (☐): Propagates *down* (all descendants become incomplete) and *up* (all ancestors are immediately marked incomplete).
+- Marking Complete (☒): Bubbles *down* (all descendants become complete) and *up* (ancestors become complete only if every one of their children is now complete).
+- Marking Incomplete (☐): Bubbles *down* (all descendants become incomplete) and *up* (all ancestors are immediately marked incomplete).
 
 ## Commands
 
@@ -37,6 +37,6 @@
 - `0`: Success
 - `1`: Usage error (bad CLI arguments)
 - `2`: Validation error (missing parent, gap detected, invalid number)
-- `3`: I/O error (file unreadable/unwritable or contains malformed lines).
+- `3`: I/O error (file unreadable/unwritable, or contains malformed lines failing the strict format, aborting to prevent data corruption).
 
 *Note: All error messages must be printed to standard error and prefixed strictly with `error:` (e.g., `error: sibling gap - expected 1.4`).*

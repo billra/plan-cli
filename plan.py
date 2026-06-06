@@ -7,235 +7,219 @@ Maintains an ordered, tree-like structure of tasks in ~/plan.txt.
 import sys
 import re
 from pathlib import Path
-from enum import IntEnum
 
-# --- Constants & Configuration ---
-CHECK_INCOMPLETE = '☐'
-CHECK_COMPLETE = '☒'
+class UsageError(Exception): pass
+class ValidationError(Exception): pass
 
+def parse_num(s):
+    if not re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', s):
+        raise ValidationError(f"invalid task number format: {s}")
+    return tuple(map(int, s.split('.')))
 
-class ExitCode(IntEnum):
-    SUCCESS = 0
-    USAGE = 1
-    VALIDATION = 2
-    IO = 3
+def stringify(num_tuple):
+    return '.'.join(map(str, num_tuple))
 
-
-# --- Error Handling ---
-class UsageError(Exception):
-    """Raised for invalid CLI arguments."""
-
-class ValidationError(Exception):
-    """Raised for invalid data state (gaps, missing parents, invalid numbers)."""
-
-
-# --- Helper Functions ---
-def parse_num(num_str):
-    """Validates and converts a string number (e.g., '1.2.10') into a tuple of ints."""
-    if not re.match(r'^[1-9]\d*(?:\.[1-9]\d*)*$', num_str):
-        raise ValidationError(f"invalid task number format: {num_str}")
-    return tuple(int(x) for x in num_str.split('.'))
-
-def format_num(num_tuple):
-    """Converts a tuple of ints back to a string."""
-    return '.'.join(str(x) for x in num_tuple)
-
-
-# --- Core Data Models ---
 class TaskNode:
-    """A node in the plan tree. Its task number is dynamically derived from its array position."""
-    def __init__(self, desc="", is_complete=False):
+    def __init__(self, num, desc, is_done=False):
+        self.num = num  # tuple of ints
         self.desc = desc
-        self.is_complete = is_complete
-        self.children = []
+        self.is_done = is_done
         self.parent = None
+        self.children = []
 
-    @property
-    def num(self):
-        """Recursively calculate the tuple number based on its index in the parent's array."""
+    def set_done(self, val):
+        self.is_done = val
+        for child in self.children:
+            child.set_done(val)
+
+    def bubble_up(self):
         if not self.parent:
-            return ()
-        idx = self.parent.children.index(self) + 1
-        return self.parent.num + (idx,)
+            return
+        if self.is_done:
+            if all(child.is_done for child in self.parent.children):
+                self.parent.is_done = True
+                self.parent.bubble_up()
+        else:
+            self.parent.is_done = False
+            self.parent.bubble_up()
 
     def to_line(self):
-        """Serializes the task to the strict file format."""
-        box = CHECK_COMPLETE if self.is_complete else CHECK_INCOMPLETE
+        """Standardizes escaping for both saving and printing."""
+        state = '☒' if self.is_done else '☐'
         desc_esc = self.desc.replace('\\', '\\\\').replace('"', '\\"')
-        return f'{box} {format_num(self.num)} "{desc_esc}"'
+        return f'{state} {stringify(self.num)} "{desc_esc}"'
 
-    def __str__(self):
-        return self.to_line()
-
-
-# --- Task Manager ---
 class PlanManager:
-    """Handles the tree state, mutations, and file I/O."""
-
-    def __init__(self, plan_file):
-        self.plan_file = plan_file
-        self.root = TaskNode()  # A dummy root node to hold the top-level tasks
+    def __init__(self, filepath):
+        self.filepath = Path(filepath)
+        self.root_nodes = []
         self.load()
 
-    # --- Data Access ---
-    def get_node(self, num_tuple, strict=False):
-        """Walks down the tree to find a node by its tuple number."""
-        curr = self.root
-        for idx in num_tuple:
-            if idx - 1 < 0 or idx - 1 >= len(curr.children):
-                if strict:
-                    raise ValidationError(f"task {format_num(num_tuple)} does not exist")
-                return None
-            curr = curr.children[idx - 1]
-        return curr
-
-    def _traverse(self, node):
-        """Yields all nodes in depth-first order."""
-        for child in node.children:
-            yield child
-            yield from self._traverse(child)
-
-    # --- IO & Validation ---
     def load(self):
-        if not self.plan_file.exists():
+        if not self.filepath.exists():
             return
 
-        try:
-            content = self.plan_file.read_text(encoding='utf-8')
-        except OSError as e:
-            raise OSError(f"unable to read file {self.plan_file}") from e
+        flat_tasks = []
+        lines = self.filepath.read_text(encoding='utf-8').splitlines()
 
-        pattern = re.compile(rf'^({CHECK_INCOMPLETE}|{CHECK_COMPLETE}) ([\d\.]+) "(.*)"$')
-
-        for line_idx, line in enumerate(content.splitlines(), 1):
+        for idx, line in enumerate(lines, 1):
             if not line.strip():
                 continue
-
-            match = pattern.match(line)
+            match = re.match(r'^([☐☒])\s+([1-9]\d*(?:\.[1-9]\d*)*)\s+"(.*)"$', line)
             if not match:
-                raise OSError(f"malformed line {line_idx} in plan.txt")
+                raise OSError(f"malformed line {idx} in plan.txt")
 
-            box, num_str, raw_desc = match.groups()
-            num = parse_num(num_str)
-            desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\')
+            state, num_str, desc = match.groups()
+            desc = desc.replace('\\"', '"').replace('\\\\', '\\')
+            flat_tasks.append((parse_num(num_str), desc, state == '☒'))
 
-            # Since the file is strictly ordered, we can just safely rebuild the tree sequentially
-            self._insert_node_at(num, desc, is_complete=(box == CHECK_COMPLETE))
+        # Reconstruct tree hierarchy dynamically
+        flat_tasks.sort(key=lambda x: x[0])
+        node_map = {}
+        for num, desc, is_done in flat_tasks:
+            node = TaskNode(num, desc, is_done)
+            node_map[num] = node
+            if len(num) == 1:
+                self.root_nodes.append(node)
+            else:
+                parent_num = num[:-1]
+                if parent_num in node_map:
+                    parent = node_map[parent_num]
+                    node.parent = parent
+                    parent.children.append(node)
+                else:
+                    raise OSError(f"corrupt hierarchy: parent {stringify(parent_num)} missing")
 
     def save(self):
-        """Writes the entire tree recursively to disk."""
-        try:
-            lines = [node.to_line() + '\n' for node in self._traverse(self.root)]
-            self.plan_file.write_text(''.join(lines), encoding='utf-8')
-        except OSError as e:
-            raise OSError(f"unable to write to file {self.plan_file}") from e
+        lines = []
+        def collect(nodes):
+            for node in nodes:
+                # Derive number dynamically based on absolute index paths
+                if node.parent:
+                    idx = node.parent.children.index(node) + 1
+                    node.num = node.parent.num + (idx,)
+                else:
+                    idx = self.root_nodes.index(node) + 1
+                    node.num = (idx,)
 
-    # --- Core Tree Mutations ---
-    def _insert_node_at(self, num, desc, is_complete=False):
-        """The core mutator for injecting nodes safely into the tree hierarchy."""
-        parent = self.get_node(num[:-1])
-        if not parent:
-            raise ValidationError(f"parent {format_num(num[:-1])} does not exist")
+                lines.append(node.to_line())
+                collect(node.children)
 
-        target_idx = num[-1] - 1
+        collect(self.root_nodes)
+        self.filepath.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
 
-        # Validation: Sibling Gaps & Blank Slate
-        if target_idx > len(parent.children):
-            if parent == self.root and len(parent.children) == 0:
-                raise ValidationError("blank slate must start at 1")
-            expected = num[:-1] + (len(parent.children) + 1,)
-            raise ValidationError(f"sibling gap - expected {format_num(expected)}")
+    def find_node(self, num_str):
+        target = parse_num(num_str)
+        def search(nodes):
+            for node in nodes:
+                if node.num == target: return node
+                res = search(node.children)
+                if res: return res
+            return None
+        node = search(self.root_nodes)
+        if not node:
+            raise ValidationError(f"task {num_str} does not exist")
+        return node
 
-        # If it exists, update it. If not, append/insert it.
-        if target_idx < len(parent.children):
-            node = parent.children[target_idx]
-            node.desc = desc
-            return node
-        else:
-            node = TaskNode(desc, is_complete)
-            node.parent = parent
-            parent.children.append(node)
-            return node
-
-    # --- Bubble Rules ---
-    def _bubble_down(self, node, state):
-        node.is_complete = state
-        for child in self._traverse(node): # <-- FIXED HERE
-            child.is_complete = state
-
-    def _bubble_up_complete(self, node):
-        curr = node.parent
-        while curr and curr != self.root:
-            if all(c.is_complete for c in curr.children):
-                curr.is_complete = True
-                curr = curr.parent
-            else:
-                break
-
-    def _bubble_up_incomplete(self, node):
-        curr = node.parent
-        while curr and curr != self.root:
-            curr.is_complete = False
-            curr = curr.parent
-
-    # --- Command Implementations ---
     def print_all(self):
-        for node in self._traverse(self.root):
-            print(node)
+        def out(nodes):
+            for node in nodes:
+                print(node.to_line())
+                out(node.children)
+        out(self.root_nodes)
 
     def print_subtree(self, num_str):
-        node = self.get_node(parse_num(num_str), strict=True)
-        print(node)
-        for child in self._traverse(node):
-            print(child)
+        root = self.find_node(num_str)
+        def out(node):
+            print(node.to_line())
+            for child in node.children: out(child)
+        out(root)
 
     def complete(self, num_str):
-        node = self.get_node(parse_num(num_str), strict=True)
-        self._bubble_down(node, True)
-        self._bubble_up_complete(node)
+        node = self.find_node(num_str)
+        node.set_done(True)
+        node.bubble_up()
 
     def incomplete(self, num_str):
-        node = self.get_node(parse_num(num_str), strict=True)
-        self._bubble_down(node, False)
-        self._bubble_up_incomplete(node)
+        node = self.find_node(num_str)
+        node.set_done(False)
+        node.bubble_up()
+
+    def insert(self, num_str, desc):
+        target = parse_num(num_str)
+        if len(target) == 1:
+            idx = target[0] - 1
+            if idx < 0 or idx > len(self.root_nodes):
+                raise ValidationError(f"sibling gap - expected {len(self.root_nodes) + 1}")
+            self.root_nodes.insert(idx, TaskNode(target, desc))
+        else:
+            parent = self.find_node(stringify(target[:-1]))
+            idx = target[-1] - 1
+            if idx < 0 or idx > len(parent.children):
+                raise ValidationError(f"sibling gap - expected {stringify(target[:-1])}.{len(parent.children) + 1}")
+            new_node = TaskNode(target, desc)
+            new_node.parent = parent
+            parent.children.insert(idx, new_node)
+            parent.is_done = False
+            parent.bubble_up()
+
+    def delete(self, num_str):
+        node = self.find_node(num_str)
+        if node.parent:
+            node.parent.children.remove(node)
+            node.parent.bubble_up()
+        else:
+            self.root_nodes.remove(node)
 
     def add_or_replace(self, pairs):
-        # Sort tuples mathematically so parents are always processed before their children
         parsed_pairs = [(parse_num(n), d) for n, d in pairs]
         parsed_pairs.sort(key=lambda x: x[0])
 
-        affected_nodes = []
-        for num, desc in parsed_pairs:
-            node = self._insert_node_at(num, desc)
-            affected_nodes.append(node)
+        for target, desc in parsed_pairs:
+            # Try to replace
+            def search(nodes):
+                for n in nodes:
+                    if n.num == target: return n
+                    res = search(n.children)
+                    if res: return res
+                return None
 
-        # Trigger side-effects only after all insertions are valid
-        for node in affected_nodes:
-            self._bubble_down(node, False)
-            self._bubble_up_incomplete(node)
+            existing = search(self.root_nodes)
+            if existing:
+                existing.desc = desc
+                existing.is_done = False
+                existing.bubble_up()
+            else:
+                # Add asset
+                if len(target) == 1:
+                    if target[0] != len(self.root_nodes) + 1:
+                        if len(self.root_nodes) == 0:
+                            raise ValidationError("blank slate must start at 1")
+                        raise ValidationError(f"sibling gap - expected {len(self.root_nodes) + 1}")
+                    self.root_nodes.append(TaskNode(target, desc))
+                else:
+                    parent = search(self.root_nodes)
+                    if not parent:
+                        # Backup hierarchy seek if not built in batch yet
+                        def search_str(nodes, t):
+                            for n in nodes:
+                                if n.num == t: return n
+                                r = search_str(n.children, t)
+                                if r: return r
+                            return None
+                        parent = search_str(self.root_nodes, target[:-1])
 
-    def insert(self, num_str, desc):
-        num = parse_num(num_str)
-        parent = self.get_node(num[:-1], strict=True)
-        target_idx = num[-1] - 1
+                    if not parent:
+                        raise ValidationError(f"parent {stringify(target[:-1])} does not exist")
 
-        if target_idx > len(parent.children):
-            expected = num[:-1] + (len(parent.children) + 1,)
-            raise ValidationError(f"sibling gap - expected {format_num(expected)}")
+                    if target[-1] != len(parent.children) + 1:
+                        raise ValidationError(f"sibling gap - expected {stringify(target[:-1])}.{len(parent.children) + 1}")
 
-        node = TaskNode(desc)
-        node.parent = parent
-        parent.children.insert(target_idx, node) # Native shift right!
-
-        self._bubble_down(node, False)
-        self._bubble_up_incomplete(node)
-
-    def delete(self, num_str):
-        node = self.get_node(parse_num(num_str), strict=True)
-        node.parent.children.remove(node) # Native shift left!
-
-
-# --- CLI Setup & Help Text ---
+                    new_node = TaskNode(target, desc)
+                    new_node.parent = parent
+                    parent.children.append(new_node)
+                    parent.is_done = False
+                    parent.bubble_up()
 HELP_TEXT = """Plan Tool Specification Synopsis
 
 Storage:
@@ -257,9 +241,7 @@ Commands:
   plan delete <n>         → Delete <n> + descendants. Following siblings shift left (-1).
   plan --help             → Print this spec synopsis
 """
-
 def dispatch(plan_file, args):
-    """Takes the target file and a list of arguments."""
     manager = PlanManager(plan_file)
 
     match args:
@@ -269,18 +251,23 @@ def dispatch(plan_file, args):
         case ["--help"]:
             print(HELP_TEXT, end="")
             return
-        case ["complete", n]:
-            manager.complete(n)
-        case ["incomplete", n]:
-            manager.incomplete(n)
-        case ["insert", n, desc]:
-            manager.insert(n, desc)
-        case ["delete", n]:
-            manager.delete(n)
-        case [n] if '.' in n or n.isdigit():
+        case ["complete", *rest]:
+            if len(rest) != 1: raise UsageError("unrecognized command or invalid arguments")
+            manager.complete(rest[0])
+        case ["incomplete", *rest]:
+            if len(rest) != 1: raise UsageError("unrecognized command or invalid arguments")
+            manager.incomplete(rest[0])
+        case ["insert", *rest]:
+            if len(rest) != 2: raise UsageError("unrecognized command or invalid arguments")
+            manager.insert(rest[0], rest[1])
+        # ... inside dispatch ...
+        case ["delete", *rest]:
+            if len(rest) != 1: raise UsageError("unrecognized command or invalid arguments")
+            manager.delete(rest[0])
+        case [n] if n.isdigit() or '.' in n:
             manager.print_subtree(n)
             return
-        case _ if len(args) >= 2 and len(args) % 2 == 0:
+        case _ if len(args) % 2 == 0:
             pairs = list(zip(args[0::2], args[1::2]))
             manager.add_or_replace(pairs)
         case _:
@@ -289,21 +276,20 @@ def dispatch(plan_file, args):
     manager.save()
 
 def main():
-    """The CLI entry point handles all sys interactions."""
-    plan_file = Path('~/plan.txt').expanduser()
-    args = sys.argv[1:]
-
+    if len(sys.argv) == 2 and sys.argv[1] == '--help':
+        print(HELP_TEXT, end="")
+        sys.exit(0)
     try:
-        dispatch(plan_file, args)
+        dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(ExitCode.USAGE)
+        sys.exit(1)
     except ValidationError as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(ExitCode.VALIDATION)
+        sys.exit(2)
     except OSError as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(ExitCode.IO)
+        sys.exit(3)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
