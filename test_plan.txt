@@ -182,6 +182,7 @@ Inserting an orphan must fail structural validation safely (preventing KeyErrors
     ValidationError: parent 4 does not exist
 
 Inserting with a sibling gap must also fail structural validation safely.
+Note: Because 2 only has one child (2.1), the next logical sibling is 2.2!
     >>> cmd("insert", "2.4", "Gap Insert")
     ValidationError: sibling gap - expected 2.2
 
@@ -296,8 +297,60 @@ If a user manually corrupts the file with malformed text, the tool completely ab
     >>> cmd()
     OSError: malformed line 1 in plan.txt
 
-Let's delete the corrupted file so the application resets to a blank slate for the final test.
+Let's delete the corrupted file so the application resets to a blank slate for the final tests.
     >>> plan_file.unlink()
+
+Strict Transaction Isolation (Phantom Mutations)
+------------------------------------------------
+Because we draft changes on an isolated deepcopy of the tree, if a batch operation
+modifies an existing node but fails later, the original node must not leak state.
+    >>> cmd("1", "Original Root", "1.1", "Original Child")
+    >>> cmd("complete", "1")
+    >>> cmd("1")
+    ☒ 1 "Original Root"
+    ☒ 1.1 "Original Child"
+
+Now we attempt a batch that successfully updates the Root (which normally forces it
+to incomplete), but we intentionally trigger a sibling gap error on the second item.
+    >>> cmd("1", "Hacked Root", "1.3", "Gap Insert")
+    ValidationError: sibling gap - expected 1.2
+
+The entire transaction must rollback. The Root must still be complete, and its
+description must remain exactly as it was.
+    >>> cmd("1")
+    ☒ 1 "Original Root"
+    ☒ 1.1 "Original Child"
+
+Deep Bubble Rollbacks
+---------------------
+If a batch replacement triggers an aggressive "incomplete bubble up" all the way
+to the root, but the transaction fails, the entire bubble chain must rollback.
+    >>> cmd("1.1.1", "Deep Leaf")
+    >>> cmd("complete", "1")
+    >>> cmd("1")
+    ☒ 1 "Original Root"
+    ☒ 1.1 "Original Child"
+    ☒ 1.1.1 "Deep Leaf"
+
+We replace the Deep Leaf (incompleting it and its ancestors), but append a bad command.
+    >>> cmd("1.1.1", "Replaced Leaf", "2.2", "Bad Orphan")
+    ValidationError: parent 2 does not exist
+
+Verify the root and all branches remained identically complete.
+    >>> cmd("1")
+    ☒ 1 "Original Root"
+    ☒ 1.1 "Original Child"
+    ☒ 1.1.1 "Deep Leaf"
+
+Deep Chain Batch Creation
+-------------------------
+Thanks to mathematical sorting in our batches, a user can create an entirely new
+deep chain of parent-child-grandchild dependencies in a single atomic command.
+    >>> cmd("2.1.1", "Grandchild", "2.1", "Child", "2", "Parent")
+    >>> cmd("2")
+    ☐ 2 "Parent"
+    ☐ 2.1 "Child"
+    ☐ 2.1.1 "Grandchild"
 
 Help Command
 ------------
