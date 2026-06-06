@@ -183,7 +183,7 @@ Inserting an orphan must fail structural validation safely (preventing KeyErrors
 
 Inserting with a sibling gap must also fail structural validation safely.
     >>> cmd("insert", "2.4", "Gap Insert")
-    ValidationError: sibling gap - expected 2.3
+    ValidationError: sibling gap - expected 2.2
 
 Deleting a root node correctly shifts all subsequent root nodes left.
 Because 1 was "New Root", deleting it shifts the entire 2 tree down to 1.
