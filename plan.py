@@ -6,6 +6,7 @@ Maintains an ordered, tree-like structure of tasks in ~/plan.txt.
 
 import sys
 import re
+import copy
 from pathlib import Path
 
 class UsageError(Exception): pass
@@ -21,12 +22,11 @@ def stringify(num_tuple):
     """Converts a tuple of integers back into a dot-separated string."""
     return '.'.join(map(str, num_tuple))
 
-
 class TaskNode:
     """
     Represents a single task in the hierarchy.
-    Instead of calculating deep shifts manually, tasks are just objects in a list.
-    When a list item is inserted or deleted, Python naturally shifts the sibling objects.
+    Because tasks are objects in a list, Python naturally handles all shifting
+    and memory management when nodes are inserted or removed.
     """
     def __init__(self, desc="", parent=None):
         self.desc = desc
@@ -51,14 +51,6 @@ class TaskNode:
 
         # Otherwise, we prepend our parent's computed number
         return f"{self.parent.number}.{idx}"
-
-    def clone(self, new_parent=None):
-        """Creates a deep copy of this node and its descendants."""
-        node = TaskNode(self.desc, parent=new_parent)
-        node.is_done = self.is_done
-        # FIX: Ensure the recursive call uses the correct 'new_parent' argument name
-        node.children = [child.clone(new_parent=node) for child in self.children]
-        return node
 
     def bubble_down(self, state):
         """Recursively forces the given state onto all descendants."""
@@ -92,21 +84,11 @@ class TaskNode:
         for child in self.children:
             yield from child.walk()
 
-
-class PlanTree:
-    """Manages the lifecycle, traversal, and validation of the Node structure."""
-    def __init__(self):
-        self.root = TaskNode("root")
-
-    def clone(self):
-        """Returns a completely decoupled duplicate of the tree for atomic transaction drafting."""
-        new_tree = PlanTree()
-        new_tree.root = self.root.clone()
-        return new_tree
+    # --- Tree Operations ---
 
     def get_node(self, path):
         """Traverses the tree to find a node by its tuple path. Returns None if missing."""
-        current = self.root
+        current = self
         for segment in path:
             idx = segment - 1
             if idx < 0 or idx >= len(current.children):
@@ -114,31 +96,25 @@ class PlanTree:
             current = current.children[idx]
         return current
 
-    def get_all_nodes(self):
-        """Yields every visible node in the tree in standard viewing order."""
-        for child in self.root.children:
-            yield from child.walk()
-
     def insert(self, path, desc):
         """Inserts a new task, enforcing structure and naturally shifting siblings."""
         parent_path = path[:-1]
         target_idx = path[-1] - 1
 
-        parent_node = self.get_node(parent_path)
-        if not parent_node:
+        parent = self.get_node(parent_path)
+        if not parent:
             raise ValidationError(f"parent {stringify(parent_path)} does not exist")
 
         # Gap validation
-        if target_idx > len(parent_node.children):
-            # FIX 1: Check if the root list is completely empty, regardless of the target index requested
-            if not parent_path and len(parent_node.children) == 0:
+        if target_idx > len(parent.children):
+            if not parent_path and not parent.children:
                 raise ValidationError("blank slate must start at 1")
 
-            expected_path = list(parent_path) + [len(parent_node.children) + 1]
+            expected_path = list(parent_path) + [len(parent.children) + 1]
             raise ValidationError(f"sibling gap - expected {stringify(expected_path)}")
 
-        new_node = TaskNode(desc, parent=parent_node)
-        parent_node.children.insert(target_idx, new_node)
+        new_node = TaskNode(desc, parent=parent)
+        parent.children.insert(target_idx, new_node)
         new_node.set_state(False)
 
     def delete(self, path):
@@ -150,32 +126,29 @@ class PlanTree:
         parent = node.parent
         parent.children.remove(node)
 
-        # FIX 2: If the parent still exists (isn't the hidden root), re-evaluate its completion state
-        if parent.parent:
-            if parent.children and all(c.is_done for c in parent.children):
-                parent.is_done = True
-                parent.bubble_up()
+        # Re-evaluate parent completion state in case we deleted the last incomplete child
+        if parent.parent and parent.children and all(c.is_done for c in parent.children):
+            parent.is_done = True
+            parent.bubble_up()
 
     def add_or_replace(self, pairs):
         """Batch processes additions and replacements atomically."""
-        sorted_pairs = sorted(pairs, key=lambda x: x[0])
-
-        for path, desc in sorted_pairs:
+        for path, desc in sorted(pairs, key=lambda x: x[0]):
             if node := self.get_node(path):
                 node.desc = desc
                 node.set_state(False)
             else:
                 self.insert(path, desc)
 
-
 class PlanManager:
-    """Handles disk I/O and wraps Tree operations in atomic transactions."""
+    """Handles disk I/O and wraps Tree operations in atomic deepcopy transactions."""
     def __init__(self, filepath):
         self.filepath = Path(filepath)
-        self.tree = PlanTree()
+        self.root = TaskNode("root")
         self.load()
 
     def load(self):
+        """Parses the storage file and rebuilds the node tree."""
         if not self.filepath.exists():
             return
 
@@ -184,16 +157,13 @@ class PlanManager:
             if not line.strip():
                 continue
 
-            if not (match := re.match(r'^([☐☒])\s+([1-9]\d*(?:\.[1-9]\d*)*)\s+"(.*)"$', line)):
+            match = re.match(r'^([☐☒])\s+([1-9]\d*(?:\.[1-9]\d*)*)\s+"(.*)"$', line)
+            if not match:
                 raise OSError(f"malformed line {idx} in plan.txt")
 
-            state, num_str, desc = match.groups()
-            desc = desc.replace('\\"', '"').replace('\\\\', '\\')
-            path = parse_num(num_str)
+            state, path, desc = match[1], parse_num(match[2]), match[3].replace('\\"', '"').replace('\\\\', '\\')
 
-            # Because the file format strictly enforces ordering, we can bypass
-            # the shifting rules and directly append the loaded objects to their parents.
-            parent = self.tree.get_node(path[:-1])
+            parent = self.root.get_node(path[:-1])
             if not parent:
                 raise OSError(f"hierarchy broken at line {idx} in plan.txt")
 
@@ -202,11 +172,13 @@ class PlanManager:
             parent.children.append(node)
 
     def save(self):
+        """Computes current string representations and writes to disk."""
         lines = []
-        for node in self.tree.get_all_nodes():
-            state = '☒' if node.is_done else '☐'
-            desc_esc = node.desc.replace('\\', '\\\\').replace('"', '\\"')
-            lines.append(f'{state} {node.number} "{desc_esc}"')
+        for child in self.root.children:
+            for node in child.walk():
+                state = '☒' if node.is_done else '☐'
+                desc_esc = node.desc.replace('\\', '\\\\').replace('"', '\\"')
+                lines.append(f'{state} {node.number} "{desc_esc}"')
 
         self.filepath.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
 
@@ -221,45 +193,47 @@ class PlanManager:
     # By creating a clone draft first, we guarantee atomicity. If a Validation Error
     # happens deep inside the tree manipulation, the real tree remains untouched.
 
-    def complete(self, num_str):
-        path = parse_num(num_str)
-        draft = self.tree.clone()
-        if not (node := draft.get_node(path)):
-            raise ValidationError(f"task {num_str} does not exist")
-        node.set_state(True)
-        self.tree = draft
+    def _draft(self, action):
+        """Standardizes the deepcopy atomic transaction pattern to prevent corruption."""
+        draft_root = copy.deepcopy(self.root)
+        action(draft_root)
+        self.root = draft_root
 
-    def incomplete(self, num_str):
-        path = parse_num(num_str)
-        draft = self.tree.clone()
-        if not (node := draft.get_node(path)):
-            raise ValidationError(f"task {num_str} does not exist")
-        node.set_state(False)
-        self.tree = draft
+    def complete(self, target):
+        def _action(draft):
+            node = draft.get_node(parse_num(target))
+            if not node:
+                raise ValidationError(f"task {target} does not exist")
+            node.set_state(True)
+        self._draft(_action)
 
-    def insert(self, num_str, desc):
-        draft = self.tree.clone()
-        draft.insert(parse_num(num_str), desc)
-        self.tree = draft
+    def incomplete(self, target):
+        def _action(draft):
+            node = draft.get_node(parse_num(target))
+            if not node:
+                raise ValidationError(f"task {target} does not exist")
+            node.set_state(False)
+        self._draft(_action)
 
-    def delete(self, num_str):
-        draft = self.tree.clone()
-        draft.delete(parse_num(num_str))
-        self.tree = draft
+    def insert(self, target, desc):
+        self._draft(lambda draft: draft.insert(parse_num(target), desc))
+
+    def delete(self, target):
+        self._draft(lambda draft: draft.delete(parse_num(target)))
 
     def add_or_replace(self, pairs):
-        draft = self.tree.clone()
-        draft.add_or_replace([(parse_num(n), d) for n, d in pairs])
-        self.tree = draft
+        parsed_pairs = [(parse_num(n), d) for n, d in pairs]
+        self._draft(lambda draft: draft.add_or_replace(parsed_pairs))
 
     def print_all(self):
-        self.print_tasks(self.tree.get_all_nodes())
+        for child in self.root.children:
+            self.print_tasks(child.walk())
 
-    def print_subtree(self, num_str):
-        if not (target := self.tree.get_node(parse_num(num_str))):
-            raise ValidationError(f"task {num_str} does not exist")
-        self.print_tasks(target.walk())
-
+    def print_subtree(self, target):
+        node = self.root.get_node(parse_num(target))
+        if not node:
+            raise ValidationError(f"task {target} does not exist")
+        self.print_tasks(node.walk())
 
 HELP_TEXT = """Plan Tool Specification Synopsis
 
@@ -294,16 +268,20 @@ def dispatch(plan_file, args):
             print(HELP_TEXT, end="")
             return
         case ["complete", *rest]:
-            if len(rest) != 1: raise UsageError("unrecognized command or invalid arguments")
+            if len(rest) != 1:
+                raise UsageError("unrecognized command or invalid arguments")
             manager.complete(rest[0])
         case ["incomplete", *rest]:
-            if len(rest) != 1: raise UsageError("unrecognized command or invalid arguments")
+            if len(rest) != 1:
+                raise UsageError("unrecognized command or invalid arguments")
             manager.incomplete(rest[0])
         case ["insert", *rest]:
-            if len(rest) != 2: raise UsageError("unrecognized command or invalid arguments")
+            if len(rest) != 2:
+                raise UsageError("unrecognized command or invalid arguments")
             manager.insert(rest[0], rest[1])
         case ["delete", *rest]:
-            if len(rest) != 1: raise UsageError("unrecognized command or invalid arguments")
+            if len(rest) != 1:
+                raise UsageError("unrecognized command or invalid arguments")
             manager.delete(rest[0])
         case [n] if n.isdigit() or '.' in n:
             manager.print_subtree(n)
