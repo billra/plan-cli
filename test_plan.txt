@@ -159,6 +159,80 @@ Tasks can also have completely empty descriptions.
     ☐ 3 "Has \"quotes\" and \\slashes"
     ☐ 3.1 ""
 
+Advanced Bubbling & Validation
+------------------------------
+Deleting the last incomplete child must bubble up and complete the parent.
+Let's incomplete 2.1.2, which incompletes 2.1 and 2.
+    >>> cmd("incomplete", "2.1.2")
+    >>> cmd("2")
+    ☐ 2 "Root"
+    ☐ 2.1 "A"
+    ☒ 2.1.1 "B"
+    ☐ 2.1.2 "C"
+
+Now, deleting 2.1.2 leaves 2.1.1 as the only child. Since 2.1.1 is complete, 2.1 and 2 must immediately complete.
+    >>> cmd("delete", "2.1.2")
+    >>> cmd("2")
+    ☒ 2 "Root"
+    ☒ 2.1 "A"
+    ☒ 2.1.1 "B"
+
+Inserting an orphan must fail structural validation safely (preventing KeyErrors).
+    >>> cmd("insert", "4.1", "Orphan Insert")
+    ValidationError: parent 4 does not exist
+
+Inserting with a sibling gap must also fail structural validation safely.
+    >>> cmd("insert", "2.4", "Gap Insert")
+    ValidationError: sibling gap - expected 2.3
+
+Deleting a root node correctly shifts all subsequent root nodes left.
+Because 1 was "New Root", deleting it shifts the entire 2 tree down to 1.
+    >>> cmd("delete", "1")
+    >>> cmd("1")
+    ☒ 1 "Root"
+    ☒ 1.1 "A"
+    ☒ 1.1.1 "B"
+
+Inserting a new task into a completed parent must bubble up and incomplete it.
+    >>> cmd("insert", "1.2", "New Sibling")
+    >>> cmd("1")
+    ☐ 1 "Root"
+    ☒ 1.1 "A"
+    ☒ 1.1.1 "B"
+    ☐ 1.2 "New Sibling"
+
+Let's add a second root back so the next tests don't fail on a sibling gap.
+    >>> cmd("2", "Second Root")
+
+Deep Subtree Shifting and Ghost Purging
+---------------------------------------
+Let's build a clean nested structure to test shifting mechanics.
+    >>> cmd("3", "Root 3")
+    >>> cmd("3.1", "Branch 3.1")
+    >>> cmd("3.1.1", "Leaf 3.1.1")
+    >>> cmd("3.2", "Branch 3.2")
+    >>> cmd("3.2.1", "Leaf 3.2.1")
+
+Test 1: Insert a new task at 3.1. The existing 3.1 (and its child 3.1.1) must shift right to 3.2 (and 3.2.1).
+The old 3.2 must shift right to 3.3.
+    >>> cmd("insert", "3.1", "New Branch 3.1")
+    >>> cmd("3")
+    ☐ 3 "Root 3"
+    ☐ 3.1 "New Branch 3.1"
+    ☐ 3.2 "Branch 3.1"
+    ☐ 3.2.1 "Leaf 3.1.1"
+    ☐ 3.3 "Branch 3.2"
+    ☐ 3.3.1 "Leaf 3.2.1"
+
+Test 2: Delete the newly inserted 3.1. Everything must shift left perfectly, and no duplicate "ghost" keys should remain at 3.3.
+    >>> cmd("delete", "3.1")
+    >>> cmd("3")
+    ☐ 3 "Root 3"
+    ☐ 3.1 "Branch 3.1"
+    ☐ 3.1.1 "Leaf 3.1.1"
+    ☐ 3.2 "Branch 3.2"
+    ☐ 3.2.1 "Leaf 3.2.1"
+
 Invalid Number Parsing
 ----------------------
 The `parse_num` regex requires strict dot-separated integers.
