@@ -30,7 +30,9 @@ def run_tests():
         results = doctest.testfile("test_plan.txt", extraglobs=extraglobs)
 
     if results.failed == 0:
-        print("All tests passed! ✨")
+        print(f"✨ Success! All {results.attempted} tests passed.")
+    else:
+        print(f"❌ Failed: {results.failed} out of {results.attempted} tests.")
 
     sys.exit(results.failed)
 

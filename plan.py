@@ -40,39 +40,63 @@ def format_num(num_tuple):
     """Converts a tuple of ints back to a string."""
     return '.'.join(str(x) for x in num_tuple)
 
-def is_child(child, parent):
-    """Returns True if 'child' is an immediate child of 'parent'."""
-    return len(child) == len(parent) + 1 and child[:-1] == parent
-
 
 # --- Core Data Models ---
-class Task:
-    def __init__(self, num, desc, is_complete=False):
-        self.num = num
+class TaskNode:
+    """A node in the plan tree. Its task number is dynamically derived from its array position."""
+    def __init__(self, desc="", is_complete=False):
         self.desc = desc
         self.is_complete = is_complete
+        self.children = []
+        self.parent = None
+
+    @property
+    def num(self):
+        """Recursively calculate the tuple number based on its index in the parent's array."""
+        if not self.parent:
+            return ()
+        idx = self.parent.children.index(self) + 1
+        return self.parent.num + (idx,)
 
     def to_line(self):
         """Serializes the task to the strict file format."""
         box = CHECK_COMPLETE if self.is_complete else CHECK_INCOMPLETE
         desc_esc = self.desc.replace('\\', '\\\\').replace('"', '\\"')
-        return f'{box} {format_num(self.num)} "{desc_esc}"\n'
+        return f'{box} {format_num(self.num)} "{desc_esc}"'
 
     def __str__(self):
-        return self.to_line().rstrip('\n')
+        return self.to_line()
 
 
 # --- Task Manager ---
 class PlanManager:
-    """Handles the state, mutations, and file I/O for the plan hierarchy."""
+    """Handles the tree state, mutations, and file I/O."""
 
     def __init__(self, plan_file):
         self.plan_file = plan_file
-        self.tasks = {}
+        self.root = TaskNode()  # A dummy root node to hold the top-level tasks
         self.load()
 
+    # --- Data Access ---
+    def get_node(self, num_tuple, strict=False):
+        """Walks down the tree to find a node by its tuple number."""
+        curr = self.root
+        for idx in num_tuple:
+            if idx - 1 < 0 or idx - 1 >= len(curr.children):
+                if strict:
+                    raise ValidationError(f"task {format_num(num_tuple)} does not exist")
+                return None
+            curr = curr.children[idx - 1]
+        return curr
+
+    def _traverse(self, node):
+        """Yields all nodes in depth-first order."""
+        for child in node.children:
+            yield child
+            yield from self._traverse(child)
+
+    # --- IO & Validation ---
     def load(self):
-        """Reads the plan file and parses lines into Task objects."""
         if not self.plan_file.exists():
             return
 
@@ -94,166 +118,121 @@ class PlanManager:
             box, num_str, raw_desc = match.groups()
             num = parse_num(num_str)
             desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\')
-            self.tasks[num] = Task(num, desc, is_complete=(box == CHECK_COMPLETE))
 
-        self.tasks = dict(sorted(self.tasks.items()))
+            # Since the file is strictly ordered, we can just safely rebuild the tree sequentially
+            self._insert_node_at(num, desc, is_complete=(box == CHECK_COMPLETE))
 
     def save(self):
-        """Validates the state and flushes atomically to disk."""
-        self.validate()
+        """Writes the entire tree recursively to disk."""
         try:
-            lines = [t.to_line() for t in self.tasks.values()]
+            lines = [node.to_line() + '\n' for node in self._traverse(self.root)]
             self.plan_file.write_text(''.join(lines), encoding='utf-8')
         except OSError as e:
             raise OSError(f"unable to write to file {self.plan_file}") from e
 
-    def validate(self):
-        """Enforces specification rules."""
-        if not self.tasks:
-            return
+    # --- Core Tree Mutations ---
+    def _insert_node_at(self, num, desc, is_complete=False):
+        """The core mutator for injecting nodes safely into the tree hierarchy."""
+        parent = self.get_node(num[:-1])
+        if not parent:
+            raise ValidationError(f"parent {format_num(num[:-1])} does not exist")
 
-        if (1,) not in self.tasks:
-            raise ValidationError("blank slate must start at 1")
+        target_idx = num[-1] - 1
 
-        for num in self.tasks:
-            parent = num[:-1]
-            if parent and parent not in self.tasks:
-                raise ValidationError(f"parent {format_num(parent)} does not exist")
+        # Validation: Sibling Gaps & Blank Slate
+        if target_idx > len(parent.children):
+            if parent == self.root and len(parent.children) == 0:
+                raise ValidationError("blank slate must start at 1")
+            expected = num[:-1] + (len(parent.children) + 1,)
+            raise ValidationError(f"sibling gap - expected {format_num(expected)}")
 
-            if num[-1] > 1:
-                prev_sibling = parent + (num[-1] - 1,)
-                if prev_sibling not in self.tasks:
-                    raise ValidationError(f"sibling gap - expected {format_num(prev_sibling)}")
+        # If it exists, update it. If not, append/insert it.
+        if target_idx < len(parent.children):
+            node = parent.children[target_idx]
+            node.desc = desc
+            return node
+        else:
+            node = TaskNode(desc, is_complete)
+            node.parent = parent
+            parent.children.append(node)
+            return node
 
-    # --- Print Operations ---
-    def print_all(self):
-        """Prints the entire file."""
-        for t in self.tasks.values():
-            print(t)
+    # --- Bubble Rules ---
+    def _bubble_down(self, node, state):
+        node.is_complete = state
+        for child in self._traverse(node): # <-- FIXED HERE
+            child.is_complete = state
 
-    def print_subtree(self, num_str):
-        """Prints a specific node and its descendants."""
-        num = parse_num(num_str)
-        if num not in self.tasks:
-            raise ValidationError(f"task {num_str} does not exist")
-
-        for t in self.tasks.values():
-            if t.num[:len(num)] == num:
-                print(t)
-
-    # --- Bubble & Propagation Rules ---
-    def _propagate_complete(self, num):
-        """Propagates completeness down (all descendants) and up (ancestors if criteria met)."""
-        # Propagate down
-        for t in self.tasks.values():
-            if t.num[:len(num)] == num:
-                t.is_complete = True
-
-        # Propagate up
-        parent = num[:-1]
-        while parent:
-            children = [t for t in self.tasks.values() if is_child(t.num, parent)]
-            if all(c.is_complete for c in children):
-                self.tasks[parent].is_complete = True
-                parent = parent[:-1]
+    def _bubble_up_complete(self, node):
+        curr = node.parent
+        while curr and curr != self.root:
+            if all(c.is_complete for c in curr.children):
+                curr.is_complete = True
+                curr = curr.parent
             else:
                 break
 
-    def _propagate_incomplete(self, num):
-        """Propagates incompleteness down (all descendants) and up (all ancestors unconditionally)."""
-        # Propagate down
-        for t in self.tasks.values():
-            if t.num[:len(num)] == num:
-                t.is_complete = False
-
-        # Propagate up
-        parent = num[:-1]
-        while parent:
-            self.tasks[parent].is_complete = False
-            parent = parent[:-1]
+    def _bubble_up_incomplete(self, node):
+        curr = node.parent
+        while curr and curr != self.root:
+            curr.is_complete = False
+            curr = curr.parent
 
     # --- Command Implementations ---
+    def print_all(self):
+        for node in self._traverse(self.root):
+            print(node)
+
+    def print_subtree(self, num_str):
+        node = self.get_node(parse_num(num_str), strict=True)
+        print(node)
+        for child in self._traverse(node):
+            print(child)
+
     def complete(self, num_str):
-        num = parse_num(num_str)
-        if num not in self.tasks:
-            raise ValidationError(f"task {num_str} does not exist")
-        self._propagate_complete(num)
+        node = self.get_node(parse_num(num_str), strict=True)
+        self._bubble_down(node, True)
+        self._bubble_up_complete(node)
 
     def incomplete(self, num_str):
-        num = parse_num(num_str)
-        if num not in self.tasks:
-            raise ValidationError(f"task {num_str} does not exist")
-        self._propagate_incomplete(num)
+        node = self.get_node(parse_num(num_str), strict=True)
+        self._bubble_down(node, False)
+        self._bubble_up_incomplete(node)
 
     def add_or_replace(self, pairs):
-        """Adds or replaces tasks atomically based on pairs of [number, description]."""
-        affected_nums = []
+        # Sort tuples mathematically so parents are always processed before their children
+        parsed_pairs = [(parse_num(n), d) for n, d in pairs]
+        parsed_pairs.sort(key=lambda x: x[0])
 
-        # Phase 1: Stage Mutations
-        for num_str, desc in pairs:
-            num = parse_num(num_str)
-            if num in self.tasks:
-                self.tasks[num].desc = desc
-            else:
-                self.tasks[num] = Task(num, desc)
-            affected_nums.append(num)
+        affected_nodes = []
+        for num, desc in parsed_pairs:
+            node = self._insert_node_at(num, desc)
+            affected_nodes.append(node)
 
-        # Phase 2: Enforce Consistency
-        self.tasks = dict(sorted(self.tasks.items()))
-        self.validate()
-
-        # Phase 3: Trigger Side-Effects Safely
-        for num in affected_nums:
-            self._propagate_incomplete(num)
+        # Trigger side-effects only after all insertions are valid
+        for node in affected_nodes:
+            self._bubble_down(node, False)
+            self._bubble_up_incomplete(node)
 
     def insert(self, num_str, desc):
-        """Inserts a task at <n>, shifting existing and subsequent siblings right by 1."""
         num = parse_num(num_str)
-        parent = num[:-1]
-        target_idx = num[-1]
+        parent = self.get_node(num[:-1], strict=True)
+        target_idx = num[-1] - 1
 
-        # Phase 1: Stage Mutations (Shift and Insert)
-        keys_to_shift = sorted(
-            (k for k in self.tasks if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] >= target_idx),
-            reverse=True
-        )
+        if target_idx > len(parent.children):
+            expected = num[:-1] + (len(parent.children) + 1,)
+            raise ValidationError(f"sibling gap - expected {format_num(expected)}")
 
-        for k in keys_to_shift:
-            shifted_k = k[:len(parent)] + (k[len(parent)] + 1,) + k[len(parent)+1:]
-            self.tasks[shifted_k] = self.tasks.pop(k)
-            self.tasks[shifted_k].num = shifted_k
+        node = TaskNode(desc)
+        node.parent = parent
+        parent.children.insert(target_idx, node) # Native shift right!
 
-        self.tasks[num] = Task(num, desc)
-
-        # Phase 2: Enforce Consistency
-        self.tasks = dict(sorted(self.tasks.items()))
-        self.validate()
-
-        # Phase 3: Trigger Side-Effects Safely
-        self._propagate_incomplete(num)
+        self._bubble_down(node, False)
+        self._bubble_up_incomplete(node)
 
     def delete(self, num_str):
-        """Deletes <n> + descendants, shifting subsequent siblings left by 1."""
-        num = parse_num(num_str)
-        if num not in self.tasks:
-            raise ValidationError(f"task {num_str} does not exist")
-
-        self.tasks = {k: v for k, v in self.tasks.items() if k[:len(num)] != num}
-        parent = num[:-1]
-        target_idx = num[-1]
-
-        keys_to_shift = sorted(
-            k for k in self.tasks if k[:len(parent)] == parent and len(k) >= len(num) and k[len(parent)] > target_idx
-        )
-
-        for k in keys_to_shift:
-            shifted_k = k[:len(parent)] + (k[len(parent)] - 1,) + k[len(parent)+1:]
-            self.tasks[shifted_k] = self.tasks.pop(k)
-            self.tasks[shifted_k].num = shifted_k
-
-        # Enforce consistency after deletion shifts
-        self.tasks = dict(sorted(self.tasks.items()))
-        self.validate()
+        node = self.get_node(parse_num(num_str), strict=True)
+        node.parent.children.remove(node) # Native shift left!
 
 
 # --- CLI Setup & Help Text ---
