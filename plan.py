@@ -46,13 +46,7 @@ class TaskNode:
             return ROOT_NAME # The hidden master root of the tree
 
         idx = self.parent.children.index(self) + 1
-
-        # If our parent is the hidden master root, we are a top-level task (e.g., 1, 2, 3)
-        if not self.parent.parent:
-            return str(idx)
-
-        # Otherwise, we prepend our parent's computed number
-        return f"{self.parent.number}.{idx}"
+        return str(idx) if not self.parent.parent else f"{self.parent.number}.{idx}"
 
     def format_line(self):
         """Returns the canonical string representation of the task."""
@@ -97,12 +91,13 @@ class TaskNode:
     def get_node(self, path):
         """Traverses the tree to find a node by its tuple path. Returns None if missing."""
         current = self
-        for segment in path:
-            idx = segment - 1
-            if idx < 0 or idx >= len(current.children):
-                return None
-            current = current.children[idx]
-        return current
+        try:
+            for segment in path:
+                if segment < 1: return None # Prevent negative indexing wrap-around
+                current = current.children[segment - 1]
+            return current
+        except IndexError:
+            return None
 
     def insert(self, path, desc):
         """Inserts a new task, enforcing structure and naturally shifting siblings."""
@@ -188,21 +183,14 @@ class PlanManager:
 
     def save(self):
         """Computes current string representations and writes to disk."""
-        lines = []
-        for child in self.root.children:
-            for node in child.walk():
-                lines.append(node.format_line())
-
-        self.filepath.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
+        text = "".join(f"{node.format_line()}\n" for child in self.root.children for node in child.walk())
+        self.filepath.write_text(text, encoding='utf-8')
 
     def print_tasks(self, iterator):
         """Helper to format and print a stream of nodes."""
         for node in iterator:
             print(node.format_line())
 
-    # Transactional Command Wrapper:
-    #  By creating a clone draft first, we guarantee atomicity. If a Validation
-    # Error happens during tree manipulation, the real tree remains untouched.
     def _atomic(self, action):
         """Standardizes the deepcopy atomic transaction pattern to prevent corruption."""
         draft_root = copy.deepcopy(self.root)
@@ -270,32 +258,23 @@ def dispatch(plan_file, args):
     match args:
         case []:
             manager.print_all()
-            return
+            return # Skip saving if we just printed
         case ["--help"]:
             print(HELP_TEXT, end="")
             return
-        case ["complete", *rest]:
-            if len(rest) != 1:
-                raise UsageError(f"'complete' requires exactly 1 argument: a task number (got {len(rest)})")
-            manager.complete(rest[0])
-        case ["incomplete", *rest]:
-            if len(rest) != 1:
-                raise UsageError(f"'incomplete' requires exactly 1 argument: a task number (got {len(rest)})")
-            manager.incomplete(rest[0])
-        case ["insert", *rest]:
-            if len(rest) != 2:
-                raise UsageError(f"'insert' requires exactly 2 arguments: a task number and a description (got {len(rest)})")
-            manager.insert(rest[0], rest[1])
-        case ["delete", *rest]:
-            if len(rest) != 1:
-                raise UsageError(f"'delete' requires exactly 1 argument: a task number (got {len(rest)})")
-            manager.delete(rest[0])
+        case ["complete" | "incomplete" | "delete" as cmd, target]:
+            getattr(manager, cmd)(target)
+        case ["complete" | "incomplete" | "delete" as cmd, *_]:
+            raise UsageError(f"'{cmd}' requires exactly 1 argument: a task number")
+        case ["insert", target, desc]:
+            manager.insert(target, desc)
+        case ["insert", *_]:
+            raise UsageError("'insert' requires exactly 2 arguments: a task number and a description")
         case [n] if n.isdigit() or '.' in n:
             manager.print_subtree(n)
-            return
+            return # Skip saving if we just printed
         case _ if len(args) % 2 == 0 and len(args) > 0:
-            pairs = list(zip(args[0::2], args[1::2]))
-            manager.add_or_replace(pairs)
+            manager.add_or_replace(list(zip(args[0::2], args[1::2])))
         case _:
             raise UsageError(f"unrecognized command or invalid arguments: '{' '.join(args)}'")
 
@@ -304,15 +283,9 @@ def dispatch(plan_file, args):
 def main():
     try:
         dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
-    except UsageError as e:
+    except (UsageError, ValidationError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except ValidationError as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(2)
-    except OSError as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit(3)
+        sys.exit({UsageError: 1, ValidationError: 2, OSError: 3}[type(e)])
 
 if __name__ == '__main__':
     main()
