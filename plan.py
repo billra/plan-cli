@@ -9,6 +9,8 @@ import re
 import copy
 from pathlib import Path
 
+ROOT_NAME = "root"
+
 class UsageError(Exception): pass
 class ValidationError(Exception): pass
 
@@ -41,7 +43,7 @@ class TaskNode:
         Because this is calculated on-the-fly, shifting is entirely automatic.
         """
         if not self.parent:
-            return "root" # The hidden master root of the tree
+            return ROOT_NAME # The hidden master root of the tree
 
         idx = self.parent.children.index(self) + 1
 
@@ -150,7 +152,7 @@ class PlanManager:
     """Handles disk I/O and wraps Tree operations in atomic deepcopy transactions."""
     def __init__(self, filepath):
         self.filepath = Path(filepath)
-        self.root = TaskNode("root")
+        self.root = TaskNode(ROOT_NAME)
         self.load()
 
     def load(self):
@@ -171,7 +173,7 @@ class PlanManager:
 
             parent = self.root.get_node(path[:-1])
             if not parent:
-                parent_str = stringify(path[:-1]) if path[:-1] else 'root'
+                parent_str = stringify(path[:-1]) if path[:-1] else ROOT_NAME
                 raise OSError(f"hierarchy broken at line {idx} in plan.txt: parent task '{parent_str}' missing for '{stringify(path)}'")
 
             # Validate structural continuity (sibling gaps) during load
