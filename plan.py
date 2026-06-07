@@ -52,6 +52,12 @@ class TaskNode:
         # Otherwise, we prepend our parent's computed number
         return f"{self.parent.number}.{idx}"
 
+    def format_line(self):
+        """Returns the canonical string representation of the task."""
+        state = '☒' if self.is_done else '☐'
+        desc_esc = self.desc.replace('\\', '\\\\').replace('"', '\\"')
+        return f'{state} {self.number} "{desc_esc}"'
+
     def bubble_down(self, state):
         """Recursively forces the given state onto all descendants."""
         self.is_done = state
@@ -183,18 +189,14 @@ class PlanManager:
         lines = []
         for child in self.root.children:
             for node in child.walk():
-                state = '☒' if node.is_done else '☐'
-                desc_esc = node.desc.replace('\\', '\\\\').replace('"', '\\"')
-                lines.append(f'{state} {node.number} "{desc_esc}"')
+                lines.append(node.format_line())
 
         self.filepath.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
 
     def print_tasks(self, iterator):
         """Helper to format and print a stream of nodes."""
         for node in iterator:
-            state = '☒' if node.is_done else '☐'
-            desc_esc = node.desc.replace('\\', '\\\\').replace('"', '\\"')
-            print(f'{state} {node.number} "{desc_esc}"')
+            print(node.format_line())
 
     # Transactional Command Wrapper:
     #  By creating a clone draft first, we guarantee atomicity. If a Validation
@@ -205,17 +207,18 @@ class PlanManager:
         action(draft_root)
         self.root = draft_root
 
-    def complete(self, target):
+    def _update_task_state(self, target, state, action_name):
+        """Helper to dynamically locate a node and update its state."""
         node = self.root.get_node(parse_num(target))
         if not node:
-            raise ValidationError(f"cannot mark complete: task '{target}' does not exist")
-        node.set_state(True)
+            raise ValidationError(f"cannot mark {action_name}: task '{target}' does not exist")
+        node.set_state(state)
+
+    def complete(self, target):
+        self._update_task_state(target, True, "complete")
 
     def incomplete(self, target):
-        node = self.root.get_node(parse_num(target))
-        if not node:
-            raise ValidationError(f"cannot mark incomplete: task '{target}' does not exist")
-        node.set_state(False)
+        self._update_task_state(target, False, "incomplete")
 
     def insert(self, target, desc):
         self.root.insert(parse_num(target), desc)
@@ -297,10 +300,6 @@ def dispatch(plan_file, args):
     manager.save()
 
 def main():
-    if len(sys.argv) == 2 and sys.argv[1] == '--help':
-        print(HELP_TEXT, end="")
-        sys.exit(0)
-
     try:
         dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
     except UsageError as e:
