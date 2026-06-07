@@ -67,6 +67,13 @@ Because of propagation, this must also bubble up and incomplete its ancestors.
     ☐ 1.1 "Branch"
     ☐ 1.1.1 "Updated Leaf"
 
+Marking an already incomplete task as incomplete must also be idempotent.
+    >>> cmd("incomplete", "1.1.1")
+    >>> cmd("1")
+    ☐ 1 "Root"
+    ☐ 1.1 "Branch"
+    ☐ 1.1.1 "Updated Leaf"
+
 Adding a new child to a completed parent must also incomplete the parent!
 Let's complete it all again, then add 1.1.2.
     >>> cmd("complete", "1")
@@ -159,6 +166,11 @@ Tasks can also have completely empty descriptions.
     ☐ 3 "Has \"quotes\" and \\slashes"
     ☐ 3.1 ""
 
+The file must properly handle UTF-8 encoding (e.g., emojis, accents) through save and load cycles.
+    >>> cmd("4", "Tâsk with UTF-8 🚀")
+    >>> cmd("4")
+    ☐ 4 "Tâsk with UTF-8 🚀"
+
 Advanced Bubbling & Validation
 ------------------------------
 Deleting the last incomplete child must bubble up and complete the parent.
@@ -178,7 +190,7 @@ Now, deleting 2.1.2 leaves 2.1.1 as the only child. Since 2.1.1 is complete, 2.1
     ☒ 2.1.1 "B"
 
 Inserting an orphan must fail structural validation safely (preventing KeyErrors).
-    >>> cmd("insert", "4.1", "Orphan Insert")
+    >>> cmd("insert", "9.1", "Orphan Insert")
     ValidationError: ...
 
 Inserting with a sibling gap must also fail structural validation safely.
@@ -358,11 +370,16 @@ The help command outputs the tool specification.
     >>> cmd("--help")
     Plan Tool Specification Synopsis...
 
-File Sibling Gap Validation On Load
------------------------------------
+File Load Validation (Gaps & Orphans)
+-------------------------------------
 If the storage file has a sibling gap, the loader must catch it and abort rather
 than silently renumbering tasks or corrupting tracking state.
     >>> _ = plan_file.write_text("☐ 1 \"Root\"\n☐ 1.1 \"Child A\"\n☐ 1.3 \"Gap Child\"\n", encoding="utf-8")
+    >>> cmd()
+    OSError: ...
+
+Similarly, if the storage file contains a task without its required parent, it must abort.
+    >>> _ = plan_file.write_text("☐ 1.1 \"Orphan\"\n", encoding="utf-8")
     >>> cmd()
     OSError: ...
 
@@ -380,5 +397,17 @@ not automatically complete simply because its remaining child list is empty).
     >>> cmd("delete", "1.1")
     >>> cmd()
     ☐ 1 "Root"
+
+This rule must also apply to completed parents. If both are complete, deleting the child
+leaves the parent complete.
+    >>> cmd("1.1", "New Child")
+    >>> cmd("complete", "1")
+    >>> cmd()
+    ☒ 1 "Root"
+    ☒ 1.1 "New Child"
+
+    >>> cmd("delete", "1.1")
+    >>> cmd()
+    ☒ 1 "Root"
 
     >>> plan_file.unlink()
