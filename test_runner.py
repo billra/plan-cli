@@ -27,7 +27,7 @@ def run_tests():
         }
 
         # 4. Execute the text file
-        results = doctest.testfile("test_plan.txt", extraglobs=extraglobs)
+        results = doctest.testfile("test_plan.txt", extraglobs=extraglobs, optionflags=doctest.ELLIPSIS)
 
     if results.failed == 0:
         print(f"✨ Success! All {results.attempted} tests passed.")

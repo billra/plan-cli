@@ -15,7 +15,7 @@ class ValidationError(Exception): pass
 def parse_num(s):
     """Validates and converts a dot-separated string into a tuple of integers."""
     if not re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', s):
-        raise ValidationError(f"invalid task number format: {s}")
+        raise ValidationError(f"invalid task number format: '{s}' (expected positive dot-separated integers like '1' or '1.2')")
     return tuple(map(int, s.split('.')))
 
 def stringify(num_tuple):
@@ -103,15 +103,15 @@ class TaskNode:
 
         parent = self.get_node(parent_path)
         if not parent:
-            raise ValidationError(f"parent {stringify(parent_path)} does not exist")
+            raise ValidationError(f"cannot insert '{stringify(path)}': parent task '{stringify(parent_path)}' does not exist")
 
         # Gap validation
         if target_idx > len(parent.children):
             if not parent_path and not parent.children:
-                raise ValidationError("blank slate must start at 1")
+                raise ValidationError(f"cannot insert '{stringify(path)}': a blank plan must start at task '1'")
 
             expected_path = list(parent_path) + [len(parent.children) + 1]
-            raise ValidationError(f"sibling gap - expected {stringify(expected_path)}")
+            raise ValidationError(f"cannot insert '{stringify(path)}': sibling gap detected, expected '{stringify(expected_path)}'")
 
         new_node = TaskNode(desc, parent=parent)
         parent.children.insert(target_idx, new_node)
@@ -121,7 +121,7 @@ class TaskNode:
         """Deletes a task and its descendants, naturally closing the gap behind it."""
         node = self.get_node(path)
         if not node:
-            raise ValidationError(f"task {stringify(path)} does not exist")
+            raise ValidationError(f"cannot delete task '{stringify(path)}': task does not exist")
 
         parent = node.parent
         parent.children.remove(node)
@@ -159,18 +159,20 @@ class PlanManager:
 
             match = re.match(r'^([☐☒])\s+([1-9]\d*(?:\.[1-9]\d*)*)\s+"(.*)"$', line)
             if not match:
-                raise OSError(f"malformed line {idx} in plan.txt")
+                raise OSError(f"malformed line {idx} in plan.txt: '{line.strip()}' (expected format: ☐|☒ <number> \"<description>\")")
 
             state, path, desc = match[1], parse_num(match[2]), match[3].replace('\\"', '"').replace('\\\\', '\\')
 
             parent = self.root.get_node(path[:-1])
             if not parent:
-                raise OSError(f"hierarchy broken at line {idx} in plan.txt")
+                parent_str = stringify(path[:-1]) if path[:-1] else 'root'
+                raise OSError(f"hierarchy broken at line {idx} in plan.txt: parent task '{parent_str}' missing for '{stringify(path)}'")
 
             # Validate structural continuity (sibling gaps) during load
             target_idx = path[-1] - 1
             if target_idx != len(parent.children):
-                raise OSError(f"hierarchy broken at line {idx} in plan.txt")
+                expected_path_str = stringify(path[:-1] + (len(parent.children) + 1,))
+                raise OSError(f"hierarchy broken at line {idx} in plan.txt: sibling gap detected for '{stringify(path)}', expected '{expected_path_str}'")
 
             node = TaskNode(desc, parent=parent)
             node.is_done = (state == '☒')
@@ -206,13 +208,13 @@ class PlanManager:
     def complete(self, target):
         node = self.root.get_node(parse_num(target))
         if not node:
-            raise ValidationError(f"task {target} does not exist")
+            raise ValidationError(f"cannot mark complete: task '{target}' does not exist")
         node.set_state(True)
 
     def incomplete(self, target):
         node = self.root.get_node(parse_num(target))
         if not node:
-            raise ValidationError(f"task {target} does not exist")
+            raise ValidationError(f"cannot mark incomplete: task '{target}' does not exist")
         node.set_state(False)
 
     def insert(self, target, desc):
@@ -232,7 +234,7 @@ class PlanManager:
     def print_subtree(self, target):
         node = self.root.get_node(parse_num(target))
         if not node:
-            raise ValidationError(f"task {target} does not exist")
+            raise ValidationError(f"cannot print subtree: task '{target}' does not exist")
         self.print_tasks(node.walk())
 
 HELP_TEXT = """Plan Tool Specification Synopsis
@@ -247,14 +249,14 @@ Hierarchy:
   • Gaps are invalid at all times. Sibling sets must be consecutive.
 
 Commands:
-  plan                    → Print entire file
-  plan <n>                → Print <n> and its descendants
-  plan <n> "<d>" ...      → Add/replace each pair. Atomic. Resets replacements to incomplete.
-  plan complete <n>       → Mark <n> + descendants complete. Bubbles up to complete ancestors if all siblings complete.
-  plan incomplete <n>     → Mark <n> + descendants incomplete. Bubbles up, making all ancestors incomplete.
-  plan insert <n> "<d>"   → Insert task at <n>. Existing <n> and following siblings shift right (+1).
-  plan delete <n>         → Delete <n> + descendants. Following siblings shift left (-1).
-  plan --help             → Print this spec synopsis
+  plan                  → Print entire file
+  plan <n>              → Print <n> and its descendants
+  plan <n> "<d>" ...    → Add/replace each pair. Atomic. Resets replacements to incomplete.
+  plan complete <n>     → Mark <n> + descendants complete. Bubbles up to complete ancestors if all siblings complete.
+  plan incomplete <n>   → Mark <n> + descendants incomplete. Bubbles up, making all ancestors incomplete.
+  plan insert <n> "<d>" → Insert task at <n>. Existing <n> and following siblings shift right (+1).
+  plan delete <n>       → Delete <n> + descendants. Following siblings shift left (-1).
+  plan --help           → Print this spec synopsis
 """
 
 def dispatch(plan_file, args):
@@ -269,19 +271,19 @@ def dispatch(plan_file, args):
             return
         case ["complete", *rest]:
             if len(rest) != 1:
-                raise UsageError("unrecognized command or invalid arguments")
+                raise UsageError(f"'complete' requires exactly 1 argument: a task number (got {len(rest)})")
             manager.complete(rest[0])
         case ["incomplete", *rest]:
             if len(rest) != 1:
-                raise UsageError("unrecognized command or invalid arguments")
+                raise UsageError(f"'incomplete' requires exactly 1 argument: a task number (got {len(rest)})")
             manager.incomplete(rest[0])
         case ["insert", *rest]:
             if len(rest) != 2:
-                raise UsageError("unrecognized command or invalid arguments")
+                raise UsageError(f"'insert' requires exactly 2 arguments: a task number and a description (got {len(rest)})")
             manager.insert(rest[0], rest[1])
         case ["delete", *rest]:
             if len(rest) != 1:
-                raise UsageError("unrecognized command or invalid arguments")
+                raise UsageError(f"'delete' requires exactly 1 argument: a task number (got {len(rest)})")
             manager.delete(rest[0])
         case [n] if n.isdigit() or '.' in n:
             manager.print_subtree(n)
@@ -290,7 +292,7 @@ def dispatch(plan_file, args):
             pairs = list(zip(args[0::2], args[1::2]))
             manager.add_or_replace(pairs)
         case _:
-            raise UsageError("unrecognized command or invalid arguments")
+            raise UsageError(f"unrecognized command or invalid arguments: '{' '.join(args)}'")
 
     manager.save()
 
