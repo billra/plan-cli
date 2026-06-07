@@ -24,7 +24,7 @@ def stringify(num_tuple):
 
 class TaskNode:
     """
-    Represents a single task in the hierarchy.
+    Represent a single task in the hierarchy.
     Because tasks are objects in a list, Python naturally handles all shifting
     and memory management when nodes are inserted or removed.
     """
@@ -167,6 +167,11 @@ class PlanManager:
             if not parent:
                 raise OSError(f"hierarchy broken at line {idx} in plan.txt")
 
+            # Validate structural continuity (sibling gaps) during load
+            target_idx = path[-1] - 1
+            if target_idx != len(parent.children):
+                raise OSError(f"hierarchy broken at line {idx} in plan.txt")
+
             node = TaskNode(desc, parent=parent)
             node.is_done = (state == '☒')
             parent.children.append(node)
@@ -189,41 +194,36 @@ class PlanManager:
             desc_esc = node.desc.replace('\\', '\\\\').replace('"', '\\"')
             print(f'{state} {node.number} "{desc_esc}"')
 
-    # --- Transactional Command Wrappers ---
-    # By creating a clone draft first, we guarantee atomicity. If a Validation Error
-    # happens deep inside the tree manipulation, the real tree remains untouched.
-
-    def _draft(self, action):
+    # Transactional Command Wrapper:
+    #  By creating a clone draft first, we guarantee atomicity. If a Validation
+    # Error happens during tree manipulation, the real tree remains untouched.
+    def _atomic(self, action):
         """Standardizes the deepcopy atomic transaction pattern to prevent corruption."""
         draft_root = copy.deepcopy(self.root)
         action(draft_root)
         self.root = draft_root
 
     def complete(self, target):
-        def _action(draft):
-            node = draft.get_node(parse_num(target))
-            if not node:
-                raise ValidationError(f"task {target} does not exist")
-            node.set_state(True)
-        self._draft(_action)
+        node = self.root.get_node(parse_num(target))
+        if not node:
+            raise ValidationError(f"task {target} does not exist")
+        node.set_state(True)
 
     def incomplete(self, target):
-        def _action(draft):
-            node = draft.get_node(parse_num(target))
-            if not node:
-                raise ValidationError(f"task {target} does not exist")
-            node.set_state(False)
-        self._draft(_action)
+        node = self.root.get_node(parse_num(target))
+        if not node:
+            raise ValidationError(f"task {target} does not exist")
+        node.set_state(False)
 
     def insert(self, target, desc):
-        self._draft(lambda draft: draft.insert(parse_num(target), desc))
+        self.root.insert(parse_num(target), desc)
 
     def delete(self, target):
-        self._draft(lambda draft: draft.delete(parse_num(target)))
+        self.root.delete(parse_num(target))
 
     def add_or_replace(self, pairs):
         parsed_pairs = [(parse_num(n), d) for n, d in pairs]
-        self._draft(lambda draft: draft.add_or_replace(parsed_pairs))
+        self._atomic(lambda draft: draft.add_or_replace(parsed_pairs))
 
     def print_all(self):
         for child in self.root.children:

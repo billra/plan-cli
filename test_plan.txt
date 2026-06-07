@@ -357,3 +357,28 @@ Help Command
 The help command outputs the tool specification.
     >>> cmd("--help") # doctest: +ELLIPSIS
     Plan Tool Specification Synopsis...
+
+File Sibling Gap Validation On Load
+-----------------------------------
+If the storage file has a sibling gap, the loader must catch it and abort rather
+than silently renumbering tasks or corrupting tracking state.
+    >>> _ = plan_file.write_text("☐ 1 \"Root\"\n☐ 1.1 \"Child A\"\n☐ 1.3 \"Gap Child\"\n", encoding="utf-8")
+    >>> cmd()
+    OSError: hierarchy broken at line 3 in plan.txt
+
+    >>> plan_file.unlink()
+
+Only-Child Deletion Rules
+-------------------------
+Deleting a task's only child leaves the parent in its current completion state (it does
+not automatically complete simply because its remaining child list is empty).
+    >>> cmd("1", "Root", "1.1", "Only Child")
+    >>> cmd()
+    ☐ 1 "Root"
+    ☐ 1.1 "Only Child"
+
+    >>> cmd("delete", "1.1")
+    >>> cmd()
+    ☐ 1 "Root"
+
+    >>> plan_file.unlink()
