@@ -368,7 +368,7 @@ Help Command
 ------------
 The help command outputs the tool specification.
     >>> cmd("--help")
-    Plan Tool Specification Synopsis...
+    plan ...
 
 File Load Validation (Gaps & Orphans)
 -------------------------------------

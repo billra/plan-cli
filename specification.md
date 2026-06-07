@@ -16,7 +16,7 @@
 - Continuity: Gaps are strictly invalid at all times, including the root level. An empty file must begin with task `1`. Within any sibling set, segments must be strictly consecutive (e.g., `1.1`, `1.2`, `1.3`).
 - Tree Shifting: When a task's number shifts due to insertion or deletion, its entire subtree shifts uniformly. For example, if task `1.2` is renumbered to `1.3`, its child `1.2.1` becomes `1.3.1`.
 
-### Bubble Rules (State Propagation)
+### State Propagation (Bubble Rules)
 
 - State Initialization: All newly added or inserted tasks default to incomplete (☐).
 - Downward Propagation: Whenever a task is explicitly marked complete/incomplete, or reset to incomplete during a text update, its entire subtree is forced uniformly into that same state.

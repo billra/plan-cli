@@ -230,26 +230,30 @@ class PlanManager:
             raise ValidationError(f"cannot print subtree: task '{target}' does not exist")
         self.print_tasks(node.walk())
 
-HELP_TEXT = """Plan Tool Specification Synopsis
+HELP_TEXT = """plan - A Hierarchical Task Manager
 
-Storage:
-  • File: ~/plan.txt (UTF-8)
-  • Tasks are strictly ordered by ascending task numbers.
-  • Formatting: ☐|☒ <number> "<description>"
+Structure & Continuity:
+  • Numbering uses dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
+  • Gaps are strictly invalid. Siblings must be consecutive. A blank plan starts at 1.
+  • The plan is safely stored at ~/plan.txt (UTF-8).
 
-Hierarchy:
-  • Positive, dot-separated integers with no leading zeros (e.g., 1.2.10).
-  • Gaps are invalid at all times. Sibling sets must be consecutive.
+State Propagation (Bubble Rules):
+  • Downward: Marking a task complete/incomplete forces that state onto all descendants.
+  • Upward (Complete): An ancestor completes only if ALL of its children are complete.
+  • Upward (Incomplete): An ancestor incompletes if ANY of its children are incomplete.
+  • Childless Deletion: Deleting a task's only child leaves the parent's state unchanged.
+  • Mutations: Adding or replacing a task resets it to incomplete, triggering upward rules.
 
 Commands:
-  plan                  → Print entire file
-  plan <n>              → Print <n> and its descendants
-  plan <n> "<d>" ...    → Add/replace each pair. Atomic. Resets replacements to incomplete.
-  plan complete <n>     → Mark <n> + descendants complete. Bubbles up to complete ancestors if all siblings complete.
-  plan incomplete <n>   → Mark <n> + descendants incomplete. Bubbles up, making all ancestors incomplete.
-  plan insert <n> "<d>" → Insert task at <n>. Existing <n> and following siblings shift right (+1).
-  plan delete <n>       → Delete <n> + descendants. Following siblings shift left (-1).
-  plan --help           → Print this spec synopsis
+  plan                  Print the entire plan.
+  plan <n>              Print task <n> and its descendants.
+  plan <n> "<desc>" ... Add or replace tasks. Evaluated atomically and structurally sorted.
+                        Replacements reset to incomplete. Use \\" and \\\\ to escape text.
+  plan complete <n>     Mark <n> complete. Applies downward, then bubbles up.
+  plan incomplete <n>   Mark <n> incomplete. Applies downward, then bubbles up.
+  plan insert <n> "<d>" Insert at <n>. Existing <n> and subsequent siblings shift right (+1).
+  plan delete <n>       Delete <n> and descendants. Subsequent siblings shift left (-1).
+  plan --help           Print this help text.
 """
 
 def dispatch(plan_file, args):
