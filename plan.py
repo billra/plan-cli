@@ -32,9 +32,24 @@ class TaskNode:
     """
     def __init__(self, desc="", parent=None):
         self.desc = desc
-        self.is_done = False
+        self._is_done = False
         self.parent = parent
         self.children = []
+
+    @property
+    def is_done(self):
+        """
+        Dynamically calculates state.
+        Leaf nodes return their explicit flag. Parents evaluate based on children.
+        """
+        if not self.children:
+            return self._is_done
+        return all(child.is_done for child in self.children)
+
+    @is_done.setter
+    def is_done(self, value):
+        """Sets the underlying explicit state flag."""
+        self._is_done = value
 
     @property
     def number(self):
@@ -54,31 +69,11 @@ class TaskNode:
         desc_esc = self.desc.replace('\\', '\\\\').replace('"', '\\"')
         return f'{state} {self.number} "{desc_esc}"'
 
-    def bubble_down(self, state):
-        """Recursively forces the given state onto all descendants."""
+    def set_state(self, state):
+        """Explicitly forces a state change downward onto this node and all descendants."""
         self.is_done = state
         for child in self.children:
-            child.bubble_down(state)
-
-    def bubble_up(self):
-        """Cascades state changes up the ancestor chain based on the Bubble Rules."""
-        if not self.parent or not self.parent.parent:
-            return # Stop when we reach the hidden master root
-
-        if self.is_done:
-            # Complete Bubble Rule: Ancestor completes only if ALL children are complete
-            if all(c.is_done for c in self.parent.children):
-                self.parent.is_done = True
-                self.parent.bubble_up()
-        else:
-            # Incomplete Bubble Rule: Ancestor immediately becomes incomplete
-            self.parent.is_done = False
-            self.parent.bubble_up()
-
-    def set_state(self, state):
-        """Safely applies a state change and triggers both directional rules."""
-        self.bubble_down(state)
-        self.bubble_up()
+            child.set_state(state)
 
     def walk(self):
         """Generator that yields this node and all descendants in strict pre-order."""
@@ -118,7 +113,7 @@ class TaskNode:
 
         new_node = TaskNode(desc, parent=parent)
         parent.children.insert(target_idx, new_node)
-        new_node.set_state(False)
+        # Because default state is False, parent.is_done dynamically becomes False naturally!
 
     def delete(self, path):
         """Deletes a task and its descendants, naturally closing the gap behind it."""
@@ -127,19 +122,23 @@ class TaskNode:
             raise ValidationError(f"cannot delete task '{stringify(path)}': task does not exist")
 
         parent = node.parent
+
+        # Cache the parent's derived state before we modify its children
+        parent_state_before = parent.is_done
+
         parent.children.remove(node)
 
-        # Re-evaluate parent completion state in case we deleted the last incomplete child
-        if parent.parent and parent.children and all(c.is_done for c in parent.children):
-            parent.is_done = True
-            parent.bubble_up()
+        # Childless deletion rule: If it just lost its last child, permanently
+        # bake its previous derived state into its explicit flag.
+        if parent.parent and not parent.children:
+            parent.is_done = parent_state_before
 
     def add_or_replace(self, pairs):
         """Batch processes additions and replacements atomically."""
         for path, desc in sorted(pairs, key=lambda x: x[0]):
             if node := self.get_node(path):
                 node.desc = desc
-                node.set_state(False)
+                node.set_state(False) # Forces downward; upward handles itself dynamically
             else:
                 self.insert(path, desc)
 
@@ -235,22 +234,20 @@ HELP_TEXT = """plan - A Hierarchical Task Manager
 Structure & Continuity:
   • Numbering uses dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
   • Gaps are strictly invalid. Siblings must be consecutive. A blank plan starts at 1.
-  • The plan is safely stored at ~/plan.txt (UTF-8).
 
-State Propagation (Bubble Rules):
-  • Downward: Marking a task complete/incomplete forces that state onto all descendants.
-  • Upward (Complete): An ancestor completes only if ALL of its children are complete.
-  • Upward (Incomplete): An ancestor incompletes if ANY of its children are incomplete.
-  • Childless Deletion: Deleting a task's only child leaves the parent's state unchanged.
-  • Mutations: Adding or replacing a task resets it to incomplete, triggering upward rules.
+Task States:
+  • Downward: Marking a task complete/incomplete forces that state onto all subtasks.
+  • Upward: A parent task is calculated complete if ALL of its subtasks are complete.
+  • Mutations: Adding or replacing a task sets it to incomplete.
+  • Deletion: Deleting a task's only child does not alter it's state.
 
 Commands:
   plan                  Print the entire plan.
   plan <n>              Print task <n> and its descendants.
-  plan <n> "<desc>" ... Add or replace tasks. Evaluated atomically and structurally sorted.
-                        Replacements reset to incomplete. Use \\" and \\\\ to escape text.
-  plan complete <n>     Mark <n> complete. Applies downward, then bubbles up.
-  plan incomplete <n>   Mark <n> incomplete. Applies downward, then bubbles up.
+  plan <n> "<desc>" ... Add or replace tasks. Structurally sorted then evaluated atomically.
+                        Use \\" and \\\\ to escape text.
+  plan complete <n>     Mark <n> complete.
+  plan incomplete <n>   Mark <n> incomplete.
   plan insert <n> "<d>" Insert at <n>. Existing <n> and subsequent siblings shift right (+1).
   plan delete <n>       Delete <n> and descendants. Subsequent siblings shift left (-1).
   plan --help           Print this help text.

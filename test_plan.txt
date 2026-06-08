@@ -411,3 +411,70 @@ leaves the parent complete.
     ☒ 1 "Root"
 
     >>> plan_file.unlink()
+
+The Snapshot Rule (Derived to Explicit Transition)
+--------------------------------------------------
+Under the Hybrid model, a parent dynamically calculates its state. If its last
+child is deleted, it must take a "snapshot" of its calculated state and bake
+it into its explicit state.
+
+Let's create a parent with two children, and complete one of them.
+    >>> cmd("1", "Parent", "1.1", "Child A", "1.2", "Child B")
+    >>> cmd("complete", "1.1")
+    >>> cmd()
+    ☐ 1 "Parent"
+    ☒ 1.1 "Child A"
+    ☐ 1.2 "Child B"
+
+Because 1.2 is incomplete, the parent dynamically calculates as incomplete.
+If we delete 1.2, 1.1 becomes the ONLY child. Since 1.1 is complete, the parent
+dynamically becomes complete!
+    >>> cmd("delete", "1.2")
+    >>> cmd()
+    ☒ 1 "Parent"
+    ☒ 1.1 "Child A"
+
+Now we delete 1.1, leaving 1 childless. The Snapshot Rule must trigger, capturing
+the parent's complete state right before the deletion and baking it in permanently.
+    >>> cmd("delete", "1.1")
+    >>> cmd()
+    ☒ 1 "Parent"
+
+    >>> plan_file.unlink()
+
+Ghost State Masking (Explicit vs Derived)
+-----------------------------------------
+A parent's explicit completion flag must be completely ignored if it has children.
+Let's complete a task so its explicit flag is True.
+    >>> cmd("1", "Ghost Parent")
+    >>> cmd("complete", "1")
+    >>> cmd()
+    ☒ 1 "Ghost Parent"
+
+Adding an incomplete child MUST instantly override the parent's visual state to incomplete.
+    >>> cmd("1.1", "Incomplete Child")
+    >>> cmd()
+    ☐ 1 "Ghost Parent"
+    ☐ 1.1 "Incomplete Child"
+
+    >>> plan_file.unlink()
+
+Explicit Downward Force on Replacements
+---------------------------------------
+Replacing an existing task must explicitly force an incomplete state onto all descendants,
+breaking any previously completed sub-trees.
+    >>> cmd("1", "Root", "1.1", "Branch", "1.1.1", "Leaf")
+    >>> cmd("complete", "1")
+    >>> cmd()
+    ☒ 1 "Root"
+    ☒ 1.1 "Branch"
+    ☒ 1.1.1 "Leaf"
+
+Replacing the middle "Branch" must incomplete it AND the Leaf, which dynamically incompletes the Root.
+    >>> cmd("1.1", "Replaced Branch")
+    >>> cmd()
+    ☐ 1 "Root"
+    ☐ 1.1 "Replaced Branch"
+    ☐ 1.1.1 "Leaf"
+
+    >>> plan_file.unlink()
