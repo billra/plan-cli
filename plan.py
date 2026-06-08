@@ -233,23 +233,22 @@ HELP_TEXT = """plan - A Hierarchical Task Manager
 
 Structure & Continuity:
   • Numbering uses dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
-  • Gaps are strictly invalid. Siblings must be consecutive. A blank plan starts at 1.
+  • Gaps are invalid. Siblings must be consecutive. A blank plan starts at 1.
 
 Task States:
-  • Downward: Marking a task complete/incomplete forces that state onto all subtasks.
-  • Upward: A parent task is calculated complete if ALL of its subtasks are complete.
+  • Downward: Marking a task complete/incomplete applies to all its subtasks.
+  • Upward: A parent is complete only if all its subtasks are complete.
   • Mutations: Adding or replacing a task sets it to incomplete.
-  • Deletion: Deleting a task's only child does not alter it's state.
+  • Deletion: Deleting a task's only child leaves the parent's state unchanged.
 
 Commands:
   plan                  Print the entire plan.
   plan <n>              Print task <n> and its descendants.
-  plan <n> "<desc>" ... Add or replace tasks. Structurally sorted then evaluated atomically.
-                        Use \\" and \\\\ to escape text.
-  plan complete <n>     Mark <n> complete.
-  plan incomplete <n>   Mark <n> incomplete.
+  plan <n> "<desc>" ... Add or replace tasks. (Use \\" and \\\\ to escape text).
+  plan complete <n>     Mark <n> and its descendants complete.
+  plan incomplete <n>   Mark <n> and its descendants incomplete.
   plan insert <n> "<d>" Insert at <n>. Existing <n> and subsequent siblings shift right (+1).
-  plan delete <n>       Delete <n> and descendants. Subsequent siblings shift left (-1).
+  plan delete <n>       Delete <n> and its descendants. Subsequent siblings shift left (-1).
   plan --help           Print this help text.
 """
 
