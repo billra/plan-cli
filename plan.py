@@ -175,24 +175,24 @@ class PlanManager:
 HELP_TEXT = """plan - A Hierarchical Task Manager
 
 Structure & Continuity:
-  • Numbering uses dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
-  • Gaps are completely legal (e.g., you can have 1 and 3 without a 2).
-  • A parent task must exist before you can add a child task.
+  • Use dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10) for numbering.
+  • Gaps in numbering are permitted (e.g., 1 and 3 without 2).
+  • A parent task must exist before adding a child task.
 
 Task States:
-  • State is entirely decoupled. Completing a parent does not complete its children.
-  • Marking a task complete or incomplete applies ONLY to that exact task.
-  • Adding or replacing a task sets it to incomplete.
-  • Deleting a task structurally wipes out that task and all of its descendants.
+  • State management is independent; updating a parent does not affect children.
+  • Marking a task as complete or incomplete applies only to that specific task.
+  • Adding or updating a task sets it to incomplete.
+  • Deleting a task removes that task and all its descendants.
 
 Commands:
-  plan                  Print the entire plan.
-  plan <n>              Print task <n> and its descendants.
-  plan <n> "<desc>" ... Add or replace tasks. (Use \\" and \\\\ to escape text).
-  plan complete <n>     Mark exactly <n> complete.
-  plan incomplete <n>   Mark exactly <n> incomplete.
-  plan delete <n>       Delete <n> and strictly wipe all of its descendants.
-  plan --help           Print this help text.
+  plan                   Show the entire plan.
+  plan <n>               Show task <n> and its descendants.
+  plan <n> "<desc>" ...  Add or replace tasks. (Use \" and \\ for escaping.)
+  plan complete <n>      Mark task <n> complete.
+  plan incomplete <n>    Mark task <n> incomplete.
+  plan delete <n>        Remove task <n> and all its descendants.
+  plan --help            Show this help.
 """
 
 def dispatch(plan_file, args):
