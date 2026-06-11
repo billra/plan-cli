@@ -8,8 +8,6 @@ import sys
 import re
 import copy
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, Tuple, List, Callable
 
 class UsageError(Exception): pass
 class ValidationError(Exception): pass
@@ -19,13 +17,13 @@ class ValidationError(Exception): pass
 # Data Model & Tuple Utilities
 # ==========================================
 
-@dataclass
 class Task:
     """A strictly explicit task. No derived state, no child tracking."""
-    desc: str
-    is_done: bool = False
+    def __init__(self, desc, is_done=False):
+        self.desc = desc
+        self.is_done = is_done
 
-def parse_num(s: str) -> Tuple[int, ...]:
+def parse_num(s):
     """Validates and converts a dot-separated string into a tuple of integers."""
     if not re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', s):
         raise ValidationError(
@@ -34,18 +32,18 @@ def parse_num(s: str) -> Tuple[int, ...]:
         )
     return tuple(map(int, s.split('.')))
 
-def stringify(tup: Tuple[int, ...]) -> str:
+def stringify(tup):
     """Converts a tuple of integers back into a dot-separated string."""
     return '.'.join(map(str, tup))
 
-def is_descendant(target: Tuple[int, ...], candidate: Tuple[int, ...]) -> bool:
+def is_descendant(target, candidate):
     """
     Returns True if the candidate is the target itself or a descendant.
     Because tuples match exactly by index, prefix slicing is perfectly accurate.
     """
     return candidate[:len(target)] == target
 
-def get_parent_path(tup: Tuple[int, ...]) -> Tuple[int, ...]:
+def get_parent_path(tup):
     """Returns the parent tuple, or an empty tuple if it's a root node."""
     return tup[:-1]
 
@@ -57,9 +55,9 @@ def get_parent_path(tup: Tuple[int, ...]) -> Tuple[int, ...]:
 class PlanManager:
     """Handles disk I/O and atomic dictionary state mutations."""
 
-    def __init__(self, filepath: Path):
+    def __init__(self, filepath):
         self.filepath = filepath
-        self.tasks: Dict[Tuple[int, ...], Task] = {}
+        self.tasks = {}
         self.load()
 
     def load(self):
@@ -105,7 +103,7 @@ class PlanManager:
         text = '\n'.join(lines) + '\n' if lines else ''
         self.filepath.write_text(text, encoding='utf-8')
 
-    def transaction(self, action: Callable[[], None]):
+    def transaction(self, action):
         """
         Wraps operations in an atomic transaction. If validation fails halfway
         through a batch command, all changes are rolled back to prevent corruption.
@@ -120,7 +118,7 @@ class PlanManager:
 
     # --- Mutations ---
 
-    def add_or_replace(self, path: Tuple[int, ...], desc: str):
+    def add_or_replace(self, path, desc):
         """
         Assigns a description to a path. Overwrites existing text and
         resets the state to incomplete if the path already exists.
@@ -134,7 +132,7 @@ class PlanManager:
 
         self.tasks[path] = Task(desc=desc, is_done=False)
 
-    def delete(self, target_path: Tuple[int, ...]):
+    def delete(self, target_path):
         """Wipes out a task and strictly removes all descendants to prevent orphans."""
         if target_path not in self.tasks:
             raise ValidationError(f"task '{stringify(target_path)}' not found")
@@ -146,15 +144,15 @@ class PlanManager:
         for path in to_delete:
             del self.tasks[path]
 
-    def set_state(self, target_path: Tuple[int, ...], is_done: bool):
+    def set_state(self, target_path, is_done):
         """Modifies the state of a specific task only (no automagic cascading)."""
         if target_path not in self.tasks:
             raise ValidationError(f"task '{stringify(target_path)}' not found")
 
         self.tasks[target_path].is_done = is_done
 
-    def display(self, target_path: Tuple[int, ...] = None):
-        """Prints the tasks in a calculated hierarchical layout."""
+    def display(self, target_path=None):
+        """Prints the tasks in a flat layout, relying on numbers for hierarchy."""
         visible_tasks = sorted(
             (path, task) for path, task in self.tasks.items()
             if target_path is None or is_descendant(target_path, path)
@@ -165,8 +163,9 @@ class PlanManager:
 
         for path, task in visible_tasks:
             state_char = '☒' if task.is_done else '☐'
-            indent = '  ' * (len(path) - 1)
-            print(f'{indent}{state_char} {stringify(path)} "{task.desc}"')
+            # Apply escaping to match storage formatting
+            desc_esc = task.desc.replace('\\', '\\\\').replace('"', '\\"')
+            print(f'{state_char} {stringify(path)} "{desc_esc}"')
 
 
 # ==========================================
@@ -196,7 +195,7 @@ Commands:
   plan --help           Print this help text.
 """
 
-def dispatch(plan_file: Path, args: List[str]):
+def dispatch(plan_file, args):
     manager = PlanManager(plan_file)
 
     match args:

@@ -139,7 +139,8 @@ File Load Validation (Orphans)
 ------------------------------
 Sibling gaps in the file are perfectly fine now. However, if a user manually created
 an orphan in the text file, the loader must catch it and abort rather than corrupting state.
-    >>> _ = plan_file.write_text("☐ 1 \"Root\"\n☐ 1.2 \"Orphan\"\n", encoding="utf-8")
+Notice 1.2.1 is missing its required parent 1.2.
+    >>> _ = plan_file.write_text("☐ 1 \"Root\"\n☐ 1.2.1 \"Orphan\"\n", encoding="utf-8")
     >>> cmd()
     OSError: ...
 
