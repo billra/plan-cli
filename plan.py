@@ -1,156 +1,69 @@
 #!/usr/bin/env python3
 """
-plan - A hierarchical task manager.
-Maintains an ordered, tree-like structure of tasks in ~/plan.txt.
+plan - A hierarchical, fixed-ID task manager.
+Maintains an ordered structure of independent tasks in ~/plan.txt.
 """
 
 import sys
 import re
 import copy
 from pathlib import Path
-
-ROOT_NAME = "root"
+from dataclasses import dataclass
+from typing import Dict, Tuple, List, Callable
 
 class UsageError(Exception): pass
 class ValidationError(Exception): pass
 
-def parse_num(s):
+
+# ==========================================
+# Data Model & Tuple Utilities
+# ==========================================
+
+@dataclass
+class Task:
+    """A strictly explicit task. No derived state, no child tracking."""
+    desc: str
+    is_done: bool = False
+
+def parse_num(s: str) -> Tuple[int, ...]:
     """Validates and converts a dot-separated string into a tuple of integers."""
     if not re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', s):
-        raise ValidationError(f"invalid task number format: '{s}' (expected positive dot-separated integers like '1' or '1.2')")
+        raise ValidationError(
+            f"invalid task number format: '{s}' "
+            f"(expected positive dot-separated integers like '1' or '1.2')"
+        )
     return tuple(map(int, s.split('.')))
 
-def stringify(num_tuple):
+def stringify(tup: Tuple[int, ...]) -> str:
     """Converts a tuple of integers back into a dot-separated string."""
-    return '.'.join(map(str, num_tuple))
+    return '.'.join(map(str, tup))
 
-class TaskNode:
+def is_descendant(target: Tuple[int, ...], candidate: Tuple[int, ...]) -> bool:
     """
-    Represent a single task in the hierarchy.
-    Because tasks are objects in a list, Python naturally handles all shifting
-    and memory management when nodes are inserted or removed.
+    Returns True if the candidate is the target itself or a descendant.
+    Because tuples match exactly by index, prefix slicing is perfectly accurate.
     """
-    def __init__(self, desc="", parent=None):
-        self.desc = desc
-        self._is_done = False
-        self.parent = parent
-        self.children = []
+    return candidate[:len(target)] == target
 
-    @property
-    def is_done(self):
-        """
-        Dynamically calculates state.
-        Leaf nodes return their explicit flag. Parents evaluate based on children.
-        """
-        if not self.children:
-            return self._is_done
-        return all(child.is_done for child in self.children)
+def get_parent_path(tup: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Returns the parent tuple, or an empty tuple if it's a root node."""
+    return tup[:-1]
 
-    @is_done.setter
-    def is_done(self, value):
-        """Sets the underlying explicit state flag."""
-        self._is_done = value
 
-    @property
-    def number(self):
-        """
-        Dynamically computes the task number based on its current position in the tree.
-        Because this is calculated on-the-fly, shifting is entirely automatic.
-        """
-        if not self.parent:
-            return ROOT_NAME # The hidden master root of the tree
-
-        idx = self.parent.children.index(self) + 1
-        return str(idx) if not self.parent.parent else f"{self.parent.number}.{idx}"
-
-    def format_line(self):
-        """Returns the canonical string representation of the task."""
-        state = '☒' if self.is_done else '☐'
-        desc_esc = self.desc.replace('\\', '\\\\').replace('"', '\\"')
-        return f'{state} {self.number} "{desc_esc}"'
-
-    def set_state(self, state):
-        """Explicitly forces a state change downward onto this node and all descendants."""
-        self.is_done = state
-        for child in self.children:
-            child.set_state(state)
-
-    def walk(self):
-        """Generator that yields this node and all descendants in strict pre-order."""
-        yield self
-        for child in self.children:
-            yield from child.walk()
-
-    # --- Tree Operations ---
-
-    def get_node(self, path):
-        """Traverses the tree to find a node by its tuple path. Returns None if missing."""
-        current = self
-        try:
-            for segment in path:
-                if segment < 1: return None # Prevent negative indexing wrap-around
-                current = current.children[segment - 1]
-            return current
-        except IndexError:
-            return None
-
-    def insert(self, path, desc):
-        """Inserts a new task, enforcing structure and naturally shifting siblings."""
-        parent_path = path[:-1]
-        target_idx = path[-1] - 1
-
-        parent = self.get_node(parent_path)
-        if not parent:
-            raise ValidationError(f"cannot insert '{stringify(path)}': parent task '{stringify(parent_path)}' does not exist")
-
-        # Gap validation
-        if target_idx > len(parent.children):
-            if not parent_path and not parent.children:
-                raise ValidationError(f"cannot insert '{stringify(path)}': a blank plan must start at task '1'")
-
-            expected_path = list(parent_path) + [len(parent.children) + 1]
-            raise ValidationError(f"cannot insert '{stringify(path)}': sibling gap detected, expected '{stringify(expected_path)}'")
-
-        new_node = TaskNode(desc, parent=parent)
-        parent.children.insert(target_idx, new_node)
-        # Because default state is False, parent.is_done dynamically becomes False naturally!
-
-    def delete(self, path):
-        """Deletes a task and its descendants, naturally closing the gap behind it."""
-        node = self.get_node(path)
-        if not node:
-            raise ValidationError(f"cannot delete task '{stringify(path)}': task does not exist")
-
-        parent = node.parent
-
-        # Cache the parent's derived state before we modify its children
-        parent_state_before = parent.is_done
-
-        parent.children.remove(node)
-
-        # Childless deletion rule: If it just lost its last child, permanently
-        # bake its previous derived state into its explicit flag.
-        if parent.parent and not parent.children:
-            parent.is_done = parent_state_before
-
-    def add_or_replace(self, pairs):
-        """Batch processes additions and replacements atomically."""
-        for path, desc in sorted(pairs, key=lambda x: x[0]):
-            if node := self.get_node(path):
-                node.desc = desc
-                node.set_state(False) # Forces downward; upward handles itself dynamically
-            else:
-                self.insert(path, desc)
+# ==========================================
+# Core Engine & Storage Layer
+# ==========================================
 
 class PlanManager:
-    """Handles disk I/O and wraps Tree operations in atomic deepcopy transactions."""
-    def __init__(self, filepath):
-        self.filepath = Path(filepath)
-        self.root = TaskNode(ROOT_NAME)
+    """Handles disk I/O and atomic dictionary state mutations."""
+
+    def __init__(self, filepath: Path):
+        self.filepath = filepath
+        self.tasks: Dict[Tuple[int, ...], Task] = {}
         self.load()
 
     def load(self):
-        """Parses the storage file and rebuilds the node tree."""
+        """Parses the storage file directly into the flat dictionary."""
         if not self.filepath.exists():
             return
 
@@ -161,120 +74,166 @@ class PlanManager:
 
             match = re.match(r'^([☐☒])\s+([1-9]\d*(?:\.[1-9]\d*)*)\s+"(.*)"$', line)
             if not match:
-                raise OSError(f"malformed line {idx} in plan.txt: '{line.strip()}' (expected format: ☐|☒ <number> \"<description>\")")
+                raise OSError(
+                    f"malformed line {idx} in plan.txt: '{line.strip()}' "
+                    f"(expected format: ☐|☒ <number> \"<description>\")"
+                )
 
-            state, path, desc = match[1], parse_num(match[2]), match[3].replace('\\"', '"').replace('\\\\', '\\')
+            state_char, path_str, raw_desc = match.groups()
+            path = parse_num(path_str)
+            desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\')
 
-            parent = self.root.get_node(path[:-1])
-            if not parent:
-                parent_str = stringify(path[:-1]) if path[:-1] else ROOT_NAME
-                raise OSError(f"hierarchy broken at line {idx} in plan.txt: parent task '{parent_str}' missing for '{stringify(path)}'")
+            # Strict Orphan Validation (Protects against manual file corruption)
+            parent_path = get_parent_path(path)
+            if parent_path and parent_path not in self.tasks:
+                raise OSError(
+                    f"hierarchy broken at line {idx} in plan.txt: "
+                    f"parent task '{stringify(parent_path)}' missing for '{stringify(path)}'"
+                )
 
-            # Validate structural continuity (sibling gaps) during load
-            target_idx = path[-1] - 1
-            if target_idx != len(parent.children):
-                expected_path_str = stringify(path[:-1] + (len(parent.children) + 1,))
-                raise OSError(f"hierarchy broken at line {idx} in plan.txt: sibling gap detected for '{stringify(path)}', expected '{expected_path_str}'")
-
-            node = TaskNode(desc, parent=parent)
-            node.is_done = (state == '☒')
-            parent.children.append(node)
+            self.tasks[path] = Task(desc=desc, is_done=(state_char == '☒'))
 
     def save(self):
-        """Computes current string representations and writes to disk."""
-        text = "".join(f"{node.format_line()}\n" for child in self.root.children for node in child.walk())
+        """Writes the sorted dictionary back to disk."""
+        lines = []
+        # Python natively sorts tuples mathematically (e.g., (1, 2) before (1, 10))
+        for path, task in sorted(self.tasks.items()):
+            state_char = '☒' if task.is_done else '☐'
+            desc_esc = task.desc.replace('\\', '\\\\').replace('"', '\\"')
+            lines.append(f'{state_char} {stringify(path)} "{desc_esc}"')
+
+        text = '\n'.join(lines) + '\n' if lines else ''
         self.filepath.write_text(text, encoding='utf-8')
 
-    def print_tasks(self, iterator):
-        """Helper to format and print a stream of nodes."""
-        for node in iterator:
-            print(node.format_line())
+    def transaction(self, action: Callable[[], None]):
+        """
+        Wraps operations in an atomic transaction. If validation fails halfway
+        through a batch command, all changes are rolled back to prevent corruption.
+        """
+        original_tasks = self.tasks
+        self.tasks = copy.deepcopy(self.tasks)
+        try:
+            action()
+        except Exception:
+            self.tasks = original_tasks
+            raise
 
-    def _atomic(self, action):
-        """Standardizes the deepcopy atomic transaction pattern to prevent corruption."""
-        draft_root = copy.deepcopy(self.root)
-        action(draft_root)
-        self.root = draft_root
+    # --- Mutations ---
 
-    def _update_task_state(self, target, state, action_name):
-        """Helper to dynamically locate a node and update its state."""
-        node = self.root.get_node(parse_num(target))
-        if not node:
-            raise ValidationError(f"cannot mark {action_name}: task '{target}' does not exist")
-        node.set_state(state)
+    def add_or_replace(self, path: Tuple[int, ...], desc: str):
+        """
+        Assigns a description to a path. Overwrites existing text and
+        resets the state to incomplete if the path already exists.
+        """
+        parent_path = get_parent_path(path)
+        if parent_path and parent_path not in self.tasks:
+            raise ValidationError(
+                f"cannot add '{stringify(path)}': "
+                f"parent task '{stringify(parent_path)}' does not exist"
+            )
 
-    def complete(self, target):
-        self._update_task_state(target, True, "complete")
+        self.tasks[path] = Task(desc=desc, is_done=False)
 
-    def incomplete(self, target):
-        self._update_task_state(target, False, "incomplete")
+    def delete(self, target_path: Tuple[int, ...]):
+        """Wipes out a task and strictly removes all descendants to prevent orphans."""
+        if target_path not in self.tasks:
+            raise ValidationError(f"task '{stringify(target_path)}' not found")
 
-    def insert(self, target, desc):
-        self.root.insert(parse_num(target), desc)
+        to_delete = [
+            path for path in self.tasks
+            if is_descendant(target_path, path)
+        ]
+        for path in to_delete:
+            del self.tasks[path]
 
-    def delete(self, target):
-        self.root.delete(parse_num(target))
+    def set_state(self, target_path: Tuple[int, ...], is_done: bool):
+        """Modifies the state of a specific task only (no automagic cascading)."""
+        if target_path not in self.tasks:
+            raise ValidationError(f"task '{stringify(target_path)}' not found")
 
-    def add_or_replace(self, pairs):
-        parsed_pairs = [(parse_num(n), d) for n, d in pairs]
-        self._atomic(lambda draft: draft.add_or_replace(parsed_pairs))
+        self.tasks[target_path].is_done = is_done
 
-    def print_all(self):
-        for child in self.root.children:
-            self.print_tasks(child.walk())
+    def display(self, target_path: Tuple[int, ...] = None):
+        """Prints the tasks in a calculated hierarchical layout."""
+        visible_tasks = sorted(
+            (path, task) for path, task in self.tasks.items()
+            if target_path is None or is_descendant(target_path, path)
+        )
 
-    def print_subtree(self, target):
-        node = self.root.get_node(parse_num(target))
-        if not node:
-            raise ValidationError(f"cannot print subtree: task '{target}' does not exist")
-        self.print_tasks(node.walk())
+        if target_path and not visible_tasks:
+            raise ValidationError(f"task '{stringify(target_path)}' not found")
+
+        for path, task in visible_tasks:
+            state_char = '☒' if task.is_done else '☐'
+            indent = '  ' * (len(path) - 1)
+            print(f'{indent}{state_char} {stringify(path)} "{task.desc}"')
+
+
+# ==========================================
+# CLI Dispatcher
+# ==========================================
 
 HELP_TEXT = """plan - A Hierarchical Task Manager
 
 Structure & Continuity:
   • Numbering uses dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
-  • Gaps are invalid. Siblings must be consecutive. A blank plan starts at 1.
+  • Gaps are completely legal (e.g., you can have 1 and 3 without a 2).
+  • A parent task must exist before you can add a child task.
 
 Task States:
-  • Downward: Marking a task complete/incomplete applies to all its subtasks.
-  • Upward: A parent is complete only if all its subtasks are complete.
-  • Mutations: Adding or replacing a task sets it to incomplete.
-  • Deletion: Deleting a task's only child leaves the parent's state unchanged.
+  • State is entirely decoupled. Completing a parent does not complete its children.
+  • Marking a task complete or incomplete applies ONLY to that exact task.
+  • Adding or replacing a task sets it to incomplete.
+  • Deleting a task structurally wipes out that task and all of its descendants.
 
 Commands:
   plan                  Print the entire plan.
   plan <n>              Print task <n> and its descendants.
   plan <n> "<desc>" ... Add or replace tasks. (Use \\" and \\\\ to escape text).
-  plan complete <n>     Mark <n> and its descendants complete.
-  plan incomplete <n>   Mark <n> and its descendants incomplete.
-  plan insert <n> "<d>" Insert at <n>. Existing <n> and subsequent siblings shift right (+1).
-  plan delete <n>       Delete <n> and its descendants. Subsequent siblings shift left (-1).
+  plan complete <n>     Mark exactly <n> complete.
+  plan incomplete <n>   Mark exactly <n> incomplete.
+  plan delete <n>       Delete <n> and strictly wipe all of its descendants.
   plan --help           Print this help text.
 """
 
-def dispatch(plan_file, args):
+def dispatch(plan_file: Path, args: List[str]):
     manager = PlanManager(plan_file)
 
     match args:
         case []:
-            manager.print_all()
-            return # Skip saving if we just printed
+            manager.display()
+            return  # Skip saving if we just printed
+
         case ["--help"]:
             print(HELP_TEXT, end="")
             return
-        case ["complete" | "incomplete" | "delete" as cmd, target]:
-            getattr(manager, cmd)(target)
+
+        case ["complete" | "incomplete" as cmd, target]:
+            is_done = (cmd == "complete")
+            manager.transaction(lambda: manager.set_state(parse_num(target), is_done))
+
+        case ["delete", target]:
+            manager.transaction(lambda: manager.delete(parse_num(target)))
+
         case ["complete" | "incomplete" | "delete" as cmd, *_]:
             raise UsageError(f"'{cmd}' requires exactly 1 argument: a task number")
-        case ["insert", target, desc]:
-            manager.insert(target, desc)
-        case ["insert", *_]:
-            raise UsageError("'insert' requires exactly 2 arguments: a task number and a description")
-        case [n] if n.isdigit() or '.' in n:
-            manager.print_subtree(n)
-            return # Skip saving if we just printed
+
+        case [n] if re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', n):
+            manager.display(parse_num(n))
+            return  # Skip saving if we just printed
+
         case _ if len(args) % 2 == 0 and len(args) > 0:
-            manager.add_or_replace(list(zip(args[0::2], args[1::2])))
+            # Batch Addition: Map pairs, then sort tuples mathematically so
+            # parents are always constructed before children, preventing false orphans.
+            pairs = [(parse_num(args[i]), args[i+1]) for i in range(0, len(args), 2)]
+            pairs.sort(key=lambda x: x[0])
+
+            def batch_upsert():
+                for path, desc in pairs:
+                    manager.add_or_replace(path, desc)
+
+            manager.transaction(batch_upsert)
+
         case _:
             raise UsageError(f"unrecognized command or invalid arguments: '{' '.join(args)}'")
 
@@ -285,7 +244,7 @@ def main():
         dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
     except (UsageError, ValidationError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
-        sys.exit({UsageError: 1, ValidationError: 2, OSError: 3}[type(e)])
+        sys.exit({UsageError: 1, ValidationError: 2, OSError: 3}.get(type(e), 1))
 
 if __name__ == '__main__':
     main()
