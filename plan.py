@@ -9,8 +9,7 @@ import re
 import copy
 from pathlib import Path
 
-class UsageError(Exception): pass
-class ValidationError(Exception): pass
+class PlanError(Exception): pass
 
 
 # ==========================================
@@ -26,7 +25,7 @@ class Task:
 def parse_num(s):
     """Validates and converts a dot-separated string into a tuple of integers."""
     if not re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', s):
-        raise ValidationError(
+        raise PlanError(
             f"invalid task number format: '{s}' "
             f"(expected positive dot-separated integers like '1' or '1.2')"
         )
@@ -125,7 +124,7 @@ class PlanManager:
         """
         parent_path = get_parent_path(path)
         if parent_path and parent_path not in self.tasks:
-            raise ValidationError(
+            raise PlanError(
                 f"cannot add '{stringify(path)}': "
                 f"parent task '{stringify(parent_path)}' does not exist"
             )
@@ -135,7 +134,7 @@ class PlanManager:
     def delete(self, target_path):
         """Wipes out a task and strictly removes all descendants to prevent orphans."""
         if target_path not in self.tasks:
-            raise ValidationError(f"task '{stringify(target_path)}' not found")
+            raise PlanError(f"task '{stringify(target_path)}' not found")
 
         to_delete = [
             path for path in self.tasks
@@ -147,7 +146,7 @@ class PlanManager:
     def set_state(self, target_path, is_done):
         """Modifies the state of a specific task only (no automagic cascading)."""
         if target_path not in self.tasks:
-            raise ValidationError(f"task '{stringify(target_path)}' not found")
+            raise PlanError(f"task '{stringify(target_path)}' not found")
 
         self.tasks[target_path].is_done = is_done
 
@@ -159,7 +158,7 @@ class PlanManager:
         )
 
         if target_path and not visible_tasks:
-            raise ValidationError(f"task '{stringify(target_path)}' not found")
+            raise PlanError(f"task '{stringify(target_path)}' not found")
 
         for path, task in visible_tasks:
             state_char = '☒' if task.is_done else '☐'
@@ -214,7 +213,7 @@ def dispatch(plan_file, args):
             manager.transaction(lambda: manager.delete(parse_num(target)))
 
         case ["complete" | "incomplete" | "delete" as cmd, *_]:
-            raise UsageError(f"'{cmd}' requires exactly 1 argument: a task number")
+            raise PlanError(f"'{cmd}' requires exactly 1 argument: a task number")
 
         case [n] if re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', n):
             manager.display(parse_num(n))
@@ -233,16 +232,15 @@ def dispatch(plan_file, args):
             manager.transaction(batch_upsert)
 
         case _:
-            raise UsageError(f"unrecognized command or invalid arguments: '{' '.join(args)}'")
+            raise PlanError(f"unrecognized command or invalid arguments: '{' '.join(args)}'")
 
     manager.save()
 
 def main():
     try:
         dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
-    except (UsageError, ValidationError, OSError) as e:
-        print(f"error: {e}", file=sys.stderr)
-        sys.exit({UsageError: 1, ValidationError: 2, OSError: 3}.get(type(e), 1))
+    except (PlanError, OSError) as e:
+        sys.exit(f"error: {e}")
 
 if __name__ == '__main__':
     main()

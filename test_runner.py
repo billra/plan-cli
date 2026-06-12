@@ -17,7 +17,7 @@ def run_tests():
             """Runs commands and catches errors for doctest to see."""
             try:
                 plan.dispatch(plan_file, list(args))
-            except (plan.ValidationError, plan.UsageError, OSError) as e:
+            except (plan.PlanError, OSError) as e:
                 print(f"{type(e).__name__}: {e}")
 
         # 3. Inject our tools

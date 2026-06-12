@@ -30,14 +30,10 @@
   Pairs are sorted by number before processing so parents are created before children.
 - `plan complete <n>`: Marks task `<n>` complete.
 - `plan incomplete <n>`: Marks task `<n>` incomplete.
-- `plan delete <n>`: Remove task <n> and all its descendants.
+- `plan delete <n>`: Remove task `<n>` and all its descendants.
 - `plan --help`: Prints a synopsis of this specification.
 
 ## Exit Codes & Errors
 
 - `0`: Success
-- `1`: Usage error (bad CLI arguments)
-- `2`: Validation error (missing parent, invalid number, task not found)
-- `3`: I/O error (file unreadable/unwritable, or format malformed)
-
-*Note: Errors must print to standard error, prefixed with `error:`.*
+- `1`: Error (details printed to standard error, prefixed with `error:`)
