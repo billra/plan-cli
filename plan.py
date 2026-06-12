@@ -174,21 +174,20 @@ class PlanManager:
 
 HELP_TEXT = """plan - A Hierarchical Task Manager
 
-Structure & Continuity:
-  • Use dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10) for numbering.
+Task Numbering:
+  • Use dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
   • Gaps in numbering are permitted (e.g., 1 and 3 without 2).
   • A parent task must exist before adding a child task.
 
 Task States:
-  • State management is independent; updating a parent does not affect children.
+  • All newly added tasks default to incomplete.
   • Marking a task as complete or incomplete applies only to that specific task.
-  • Adding or updating a task sets it to incomplete.
-  • Deleting a task removes that task and all its descendants.
+  • Adding or replacing a task sets it to incomplete.
 
 Commands:
   plan                   Show the entire plan.
   plan <n>               Show task <n> and its descendants.
-  plan <n> "<desc>" ...  Add or replace tasks. (Use \" and \\ for escaping.)
+  plan <n> "<desc>" ...  Add or replace tasks. (Use \\" and \\\\ for escaping.)
   plan complete <n>      Mark task <n> complete.
   plan incomplete <n>    Mark task <n> incomplete.
   plan delete <n>        Remove task <n> and all its descendants.

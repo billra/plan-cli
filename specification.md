@@ -30,7 +30,7 @@
   A parent must exist to add a child.
 - `plan complete <n>`: Marks task `<n>` complete.
 - `plan incomplete <n>`: Marks task `<n>` incomplete.
-- `plan delete <n>`: Deletes task `<n>` and all its descendants.
+- `plan delete <n>`: Remove task <n> and all its descendants.
 - `plan --help`: Prints a synopsis of this specification.
 
 ## Exit Codes & Errors
