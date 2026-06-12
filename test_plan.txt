@@ -103,15 +103,21 @@ Attempting to add a child to a deleted parent fails.
     >>> cmd("2.1", "Zombie Child")
     PlanError: ...
 
-String Escaping & Whitespace Preservation
------------------------------------------
+String Escaping & Whitespace Stripping
+--------------------------------------
 Double quotes and backslashes must be safely escaped in storage and unescaped in memory.
-Tasks can also have completely empty descriptions or descriptions with leading/trailing spaces.
-    >>> cmd("6", 'Has "quotes" and \\slashes', "6.1", "", "6.2", "  Spaces  ")
+Leading and trailing whitespace must be silently stripped. Completely empty descriptions
+(or strings containing only spaces) are rejected.
+    >>> cmd("6", 'Has "quotes" and \\slashes', "6.1", "  Spaces Stripped  ")
     >>> cmd("6")
     ☐ 6 "Has \"quotes\" and \\slashes"
-    ☐ 6.1 ""
-    ☐ 6.2 "  Spaces  "
+    ☐ 6.1 "Spaces Stripped"
+
+    >>> cmd("6.2", "")
+    PlanError: ...
+
+    >>> cmd("6.2", "   ")
+    PlanError: ...
 
 Target Missing Errors
 ---------------------
@@ -145,7 +151,7 @@ No zeros or leading zeros:
 
 Multi-Digit & Deep Nesting Numbering
 ------------------------------------
-Tuples must sort mathematically, not lexically (e.g., 20.300 comes after 20.9).
+Tuples must sort mathematically, not lexical sorting (e.g., 20.300 comes after 20.9).
     >>> cmd("20", "Twenty", "20.9", "Nine", "20.300", "Three Hundred")
     >>> cmd("20")
     ☐ 20 "Twenty"
@@ -191,6 +197,11 @@ The tool safely ignores empty lines in the storage file.
 
 If a user manually corrupts the file with malformed text, the tool aborts to protect data.
     >>> _ = plan_file.write_text("☐ 1 Missing Quotes Around Description\n", encoding="utf-8")
+    >>> cmd()
+    OSError: ...
+
+If a file contains a record where the description parses to empty, it aborts.
+    >>> _ = plan_file.write_text("☐ 1 \"   \"\n", encoding="utf-8")
     >>> cmd()
     OSError: ...
 

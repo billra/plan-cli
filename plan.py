@@ -78,7 +78,10 @@ class PlanManager:
 
             state_char, path_str, raw_desc = match.groups()
             path = parse_num(path_str)
-            desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\')
+            desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\').strip()
+
+            if not desc:
+                raise OSError(f"malformed line {idx} in plan.txt: task description cannot be empty")
 
             # Strict Orphan Validation (Protects against manual file corruption)
             parent_path = get_parent_path(path)
@@ -122,6 +125,10 @@ class PlanManager:
         Assigns a description to a path. Overwrites existing text and
         resets the state to incomplete if the path already exists.
         """
+        desc = desc.strip()
+        if not desc:
+            raise PlanError("task description cannot be empty")
+
         parent_path = get_parent_path(path)
         if parent_path and parent_path not in self.tasks:
             raise PlanError(
