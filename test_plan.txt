@@ -1,14 +1,20 @@
 Plan.py Test Suite (Fixed ID Architecture)
 ==========================================
 
-Initial State
--------------
-The file starts empty.
+Initial State & Lazy File Creation
+----------------------------------
+The file starts out non-existent. Simply displaying the plan should NOT create the file.
+    >>> plan_file.exists()
+    False
+    >>> cmd()
     >>> plan_file.exists()
     False
 
 Tasks can be added. Under the fixed ID model, we don't strictly require starting at 1.
+Writing a task triggers the actual file creation.
     >>> cmd("1", "First Root")
+    >>> plan_file.exists()
+    True
     >>> cmd()
     ☐ 1 "First Root"
 
@@ -93,14 +99,19 @@ Deleting the root 2 wipes the rest of that tree.
     ☐ 1 "First Root"
     ☐ 5 "Far Root"
 
-String Escaping & Empty Descriptions
-------------------------------------
+Attempting to add a child to a deleted parent fails.
+    >>> cmd("2.1", "Zombie Child")
+    PlanError: ...
+
+String Escaping & Whitespace Preservation
+-----------------------------------------
 Double quotes and backslashes must be safely escaped in storage and unescaped in memory.
-Tasks can also have completely empty descriptions.
-    >>> cmd("6", 'Has "quotes" and \\slashes', "6.1", "")
+Tasks can also have completely empty descriptions or descriptions with leading/trailing spaces.
+    >>> cmd("6", 'Has "quotes" and \\slashes', "6.1", "", "6.2", "  Spaces  ")
     >>> cmd("6")
     ☐ 6 "Has \"quotes\" and \\slashes"
     ☐ 6.1 ""
+    ☐ 6.2 "  Spaces  "
 
 Target Missing Errors
 ---------------------
@@ -111,17 +122,65 @@ Attempting to operate on non-existent targets safely throws validation errors.
     >>> cmd("delete", "9.9")
     PlanError: ...
 
-Invalid Number Parsing
-----------------------
+Invalid Number Parsing (Strict Regex)
+-------------------------------------
 The `parse_num` regex requires strict dot-separated integers.
+No leading or trailing dots:
     >>> cmd("delete", "1.")
     PlanError: ...
-
     >>> cmd("delete", ".1")
     PlanError: ...
 
+No letters or symbols:
     >>> cmd("delete", "A.1")
     PlanError: ...
+
+No zeros or leading zeros:
+    >>> cmd("delete", "0")
+    PlanError: ...
+    >>> cmd("delete", "1.0")
+    PlanError: ...
+    >>> cmd("delete", "01.2")
+    PlanError: ...
+
+Multi-Digit & Deep Nesting Numbering
+------------------------------------
+Tuples must sort mathematically, not lexically (e.g., 20.300 comes after 20.9).
+    >>> cmd("20", "Twenty", "20.9", "Nine", "20.300", "Three Hundred")
+    >>> cmd("20")
+    ☐ 20 "Twenty"
+    ☐ 20.9 "Nine"
+    ☐ 20.300 "Three Hundred"
+
+Targeted Display Filtering
+--------------------------
+Ensure targeting a sub-branch strictly prints ONLY that branch and nothing above or beside it.
+    >>> cmd("20.9")
+    ☐ 20.9 "Nine"
+
+CLI Dispatch: Argument Count Mismatches
+---------------------------------------
+Batch upsert requires pairs. An odd number of arguments triggers the fallback error.
+    >>> cmd("8", "Valid", "9")
+    PlanError: ...
+
+Commands requiring exactly one argument fail safely if given zero or multiple.
+    >>> cmd("complete")
+    PlanError: ...
+    >>> cmd("delete", "1", "2")
+    PlanError: ...
+
+CLI Dispatch: Unrecognized Commands
+-----------------------------------
+Arbitrary strings are caught and rejected gracefully.
+    >>> cmd("magic", "1")
+    PlanError: ...
+
+Help Flag Safety
+----------------
+Running help should print the text but should NOT wipe or overwrite the plan file.
+    >>> cmd("--help")
+    plan - A Hierarchical Task Manager...
 
 File Parsing Resilience (Empty Lines & Corruption)
 --------------------------------------------------
@@ -137,11 +196,8 @@ If a user manually corrupts the file with malformed text, the tool aborts to pro
 
 File Load Validation (Orphans)
 ------------------------------
-Sibling gaps in the file are perfectly fine now. However, if a user manually created
-an orphan in the text file, the loader must catch it and abort rather than corrupting state.
+If a user manually created an orphan in the text file, the loader must catch it and abort.
 Notice 1.2.1 is missing its required parent 1.2.
     >>> _ = plan_file.write_text("☐ 1 \"Root\"\n☐ 1.2.1 \"Orphan\"\n", encoding="utf-8")
     >>> cmd()
     OSError: ...
-
-    >>> plan_file.unlink()
