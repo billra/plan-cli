@@ -14,6 +14,7 @@
 
 - Task numbers are dot-separated integers without leading zeros (e.g., `1`, `1.2`, `1.2.10`).
 - Gaps are permitted (e.g., `1` and `3` without `2`).
+- A parent task must exist before adding a child task.
 
 ### Task States
 
@@ -27,7 +28,6 @@
 - `plan <n>`: Prints task `<n>` and its descendants.
 - `plan <n> "<d>" …`: Adds or replaces tasks atomically.
   Pairs are sorted by number before processing so parents are created before children.
-  A parent must exist to add a child.
 - `plan complete <n>`: Marks task `<n>` complete.
 - `plan incomplete <n>`: Marks task `<n>` incomplete.
 - `plan delete <n>`: Remove task <n> and all its descendants.
