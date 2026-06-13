@@ -16,7 +16,7 @@ Writing a task triggers the actual file creation.
     >>> plan_file.exists()
     True
     >>> cmd()
-    ☐ 1 "First Root"
+    ☐ 1 First Root
 
 Atomic Addition & Order Independence
 ------------------------------------
@@ -25,9 +25,9 @@ define a valid tree in a completely random order, and it will construct properly
 throwing orphan errors.
     >>> cmd("2.1.1", "Leaf", "2", "Root", "2.1", "Branch")
     >>> cmd("2")
-    ☐ 2 "Root"
-    ☐ 2.1 "Branch"
-    ☐ 2.1.1 "Leaf"
+    ☐ 2 Root
+    ☐ 2.1 Branch
+    ☐ 2.1.1 Leaf
 
 Orphan Validation
 -----------------
@@ -43,12 +43,12 @@ Gaps Are Completely Legal
 Unlike the old model, jumping from 1 to 5, or 2.1 to 2.9, is perfectly fine.
     >>> cmd("5", "Far Root", "2.9", "Far Branch")
     >>> cmd()
-    ☐ 1 "First Root"
-    ☐ 2 "Root"
-    ☐ 2.1 "Branch"
-    ☐ 2.1.1 "Leaf"
-    ☐ 2.9 "Far Branch"
-    ☐ 5 "Far Root"
+    ☐ 1 First Root
+    ☐ 2 Root
+    ☐ 2.1 Branch
+    ☐ 2.1.1 Leaf
+    ☐ 2.9 Far Branch
+    ☐ 5 Far Root
 
 If a batch contains an invalid operation (like an orphan), the entire command aborts atomically.
     >>> cmd("2.2", "Valid", "4.1", "Invalid Orphan")
@@ -61,28 +61,28 @@ Because state is decoupled, this does NOT bubble up or down.
     >>> cmd("complete", "2.1")
     >>> cmd("2.1", "Updated Branch")
     >>> cmd("2")
-    ☐ 2 "Root"
-    ☐ 2.1 "Updated Branch"
-    ☐ 2.1.1 "Leaf"
-    ☐ 2.9 "Far Branch"
+    ☐ 2 Root
+    ☐ 2.1 Updated Branch
+    ☐ 2.1.1 Leaf
+    ☐ 2.9 Far Branch
 
 Decoupled State (No Automagic)
 ------------------------------
 Tasks are independent. Completing a parent does NOT complete its children.
     >>> cmd("complete", "2")
     >>> cmd("2")
-    ☒ 2 "Root"
-    ☐ 2.1 "Updated Branch"
-    ☐ 2.1.1 "Leaf"
-    ☐ 2.9 "Far Branch"
+    ☒ 2 Root
+    ☐ 2.1 Updated Branch
+    ☐ 2.1.1 Leaf
+    ☐ 2.9 Far Branch
 
 Completing a child does NOT dynamically complete the parent.
     >>> cmd("complete", "2.1.1")
     >>> cmd("2")
-    ☒ 2 "Root"
-    ☐ 2.1 "Updated Branch"
-    ☒ 2.1.1 "Leaf"
-    ☐ 2.9 "Far Branch"
+    ☒ 2 Root
+    ☐ 2.1 Updated Branch
+    ☒ 2.1.1 Leaf
+    ☐ 2.9 Far Branch
 
 Structural Deletion (Subtree Wiping)
 ------------------------------------
@@ -90,28 +90,28 @@ Deleting a node wipes out that node and all of its descendants, to prevent orpha
 Deleting 2.1 should wipe 2.1 and 2.1.1, leaving 2 and 2.9 alone. It does not shift 2.9!
     >>> cmd("delete", "2.1")
     >>> cmd("2")
-    ☒ 2 "Root"
-    ☐ 2.9 "Far Branch"
+    ☒ 2 Root
+    ☐ 2.9 Far Branch
 
 Deleting the root 2 wipes the rest of that tree.
     >>> cmd("delete", "2")
     >>> cmd()
-    ☐ 1 "First Root"
-    ☐ 5 "Far Root"
+    ☐ 1 First Root
+    ☐ 5 Far Root
 
 Attempting to add a child to a deleted parent fails.
     >>> cmd("2.1", "Zombie Child")
     PlanError: ...
 
-String Escaping & Whitespace Stripping
---------------------------------------
-Double quotes and backslashes must be safely escaped in storage and unescaped in memory.
+Whitespace Stripping & Formatting
+---------------------------------
+Because shell quoting is handled externally, quotes and backslashes display as literal characters.
 Leading and trailing whitespace must be silently stripped. Completely empty descriptions
 (or strings containing only spaces) are rejected.
     >>> cmd("6", 'Has "quotes" and \\slashes', "6.1", "  Spaces Stripped  ")
     >>> cmd("6")
-    ☐ 6 "Has \"quotes\" and \\slashes"
-    ☐ 6.1 "Spaces Stripped"
+    ☐ 6 Has "quotes" and \slashes
+    ☐ 6.1 Spaces Stripped
 
     >>> cmd("6.2", "")
     PlanError: ...
@@ -154,15 +154,15 @@ Multi-Digit & Deep Nesting Numbering
 Tuples must sort mathematically, not lexical sorting (e.g., 20.300 comes after 20.9).
     >>> cmd("20", "Twenty", "20.9", "Nine", "20.300", "Three Hundred")
     >>> cmd("20")
-    ☐ 20 "Twenty"
-    ☐ 20.9 "Nine"
-    ☐ 20.300 "Three Hundred"
+    ☐ 20 Twenty
+    ☐ 20.9 Nine
+    ☐ 20.300 Three Hundred
 
 Targeted Display Filtering
 --------------------------
 Ensure targeting a sub-branch strictly prints ONLY that branch and nothing above or beside it.
     >>> cmd("20.9")
-    ☐ 20.9 "Nine"
+    ☐ 20.9 Nine
 
 CLI Dispatch: Argument Count Mismatches
 ---------------------------------------
@@ -191,17 +191,17 @@ Running help should print the text but should NOT wipe or overwrite the plan fil
 File Parsing Resilience (Empty Lines & Corruption)
 --------------------------------------------------
 The tool safely ignores empty lines in the storage file.
-    >>> _ = plan_file.write_text("\n\n☐ 1 \"Surviving Task\"\n\n\n", encoding="utf-8")
+    >>> _ = plan_file.write_text("\n\n☐ 1 Surviving Task\n\n\n", encoding="utf-8")
     >>> cmd()
-    ☐ 1 "Surviving Task"
+    ☐ 1 Surviving Task
 
-If a user manually corrupts the file with malformed text, the tool aborts to protect data.
-    >>> _ = plan_file.write_text("☐ 1 Missing Quotes Around Description\n", encoding="utf-8")
+If a user manually corrupts the file with malformed text (like an invalid state char), the tool aborts to protect data.
+    >>> _ = plan_file.write_text("? 1 Invalid State Character\n", encoding="utf-8")
     >>> cmd()
     OSError: ...
 
 If a file contains a record where the description parses to empty, it aborts.
-    >>> _ = plan_file.write_text("☐ 1 \"   \"\n", encoding="utf-8")
+    >>> _ = plan_file.write_text("☐ 1    \n", encoding="utf-8")
     >>> cmd()
     OSError: ...
 
@@ -209,6 +209,6 @@ File Load Validation (Orphans)
 ------------------------------
 If a user manually created an orphan in the text file, the loader must catch it and abort.
 Notice 1.2.1 is missing its required parent 1.2.
-    >>> _ = plan_file.write_text("☐ 1 \"Root\"\n☐ 1.2.1 \"Orphan\"\n", encoding="utf-8")
+    >>> _ = plan_file.write_text("☐ 1 Root\n☐ 1.2.1 Orphan\n", encoding="utf-8")
     >>> cmd()
     OSError: ...

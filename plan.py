@@ -11,26 +11,6 @@ from pathlib import Path
 
 class PlanError(Exception): pass
 
-# ==========================================
-# Escaping helpers – single source of truth
-# ==========================================
-
-def escape(desc):
-    """
-    Reversible on-disk encoding: backslashes first, then quotes.
-    The order is critical—doing quotes first would immediately
-    create new backslashes that would be re-escaped.
-    """
-    return desc.replace('\\', '\\\\').replace('"', '\\"')
-
-def unescape(raw):
-    """
-    Inverse of escape(): quotes first, then backslashes.
-    Reversing the order guarantees we don’t collapse the
-    backslash that protects a quote we’ve already restored.
-    """
-    return raw.replace('\\"', '"').replace('\\\\', '\\')
-
 
 # ==========================================
 # Data Model & Tuple Utilities
@@ -89,16 +69,20 @@ class PlanManager:
             if not line.strip():
                 continue
 
-            match = re.match(r'^([☐☒])\s+([1-9]\d*(?:\.[1-9]\d*)*)\s+"(.*)"$', line)
-            if not match:
+            # Split into exactly 3 parts: State, Path, and Description
+            parts = line.split(maxsplit=2)
+
+            if len(parts) != 3 or parts[0] not in ('☐', '☒'):
                 raise OSError(
                     f"malformed line {idx} in plan.txt: '{line.strip()}' "
-                    f"(expected format: ☐|☒ <number> \"<description>\")"
+                    f"(expected format: ☐|☒ <number> <description>)"
                 )
 
-            state_char, path_str, raw_desc = match.groups()
+            state_char, path_str, raw_desc = parts
+
+            # parse_num validates that the path string is strictly numeric
             path = parse_num(path_str)
-            desc = unescape(raw_desc).strip()
+            desc = raw_desc.strip()
 
             if not desc:
                 raise OSError(f"malformed line {idx} in plan.txt: task description cannot be empty")
@@ -118,7 +102,7 @@ class PlanManager:
         lines = []
         for path, task in sorted(self.tasks.items()):
             state_char = '☒' if task.is_done else '☐'
-            lines.append(f'{state_char} {stringify(path)} "{escape(task.desc)}"')
+            lines.append(f'{state_char} {stringify(path)} {task.desc}')
 
         text = '\n'.join(lines) + '\n' if lines else ''
         self.filepath.write_text(text, encoding='utf-8')
@@ -187,7 +171,7 @@ class PlanManager:
 
         for path, task in visible_tasks:
             state_char = '☒' if task.is_done else '☐'
-            print(f'{state_char} {stringify(path)} "{escape(task.desc)}"')
+            print(f'{state_char} {stringify(path)} {task.desc}')
 
 
 # ==========================================
@@ -207,13 +191,13 @@ Task States:
   • Adding or replacing a task sets it to incomplete.
 
 Commands:
-  plan                   Show the entire plan.
-  plan <n>               Show task <n> and its descendants.
-  plan <n> "<desc>" ...  Add or replace tasks. (Use \\" and \\\\ for escaping.)
-  plan complete <n>      Mark task <n> complete.
-  plan incomplete <n>    Mark task <n> incomplete.
-  plan delete <n>        Remove task <n> and all its descendants.
-  plan --help            Show this help.
+  plan                    Show the entire plan.
+  plan <n>                Show task <n> and its descendants.
+  plan <n> "<desc>" ...   Add or replace tasks.
+  plan complete <n>       Mark task <n> complete.
+  plan incomplete <n>     Mark task <n> incomplete.
+  plan delete <n>         Remove task <n> and all its descendants.
+  plan --help             Show this help.
 """
 
 def dispatch(plan_file, args):
