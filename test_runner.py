@@ -16,7 +16,7 @@ def run_tests():
         def cmd(*args):
             """Runs commands and catches errors for doctest to see."""
             try:
-                plan.dispatch(plan_file, list(args))
+                plan.dispatch(list(args), plan_file)
             except (plan.PlanError, OSError) as e:
                 print(f"{type(e).__name__}: {e}")
 

@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
 """
 plan - A hierarchical, fixed-ID task manager.
-Maintains an ordered structure of independent tasks in ~/plan.txt.
 """
 
 import sys
-import re
-import copy
 from pathlib import Path
 
 class PlanError(Exception): pass
 
-PATH_RE = re.compile(r'^[1-9]\d*(\.[1-9]\d*)*$')
-
 # ==========================================
-# Task Object & Utilities
+# Task & Utilities
 # ==========================================
 
 class Task:
@@ -24,9 +19,12 @@ class Task:
         self.is_done = is_done
 
 def parse_num(s):
-    if not PATH_RE.match(s):
-        raise PlanError(f"invalid task format: '{s}' (expected e.g. '1' or '1.2')")
-    return tuple(map(int, s.split('.')))
+    try:
+        t = tuple(map(int, s.split('.')))
+        if not t or any(i < 1 for i in t): raise ValueError
+        return t
+    except ValueError:
+        raise PlanError(f"invalid format: '{s}' (expected e.g. '1' or '1.2')")
 
 def stringify(tup):
     return '.'.join(map(str, tup))
@@ -48,65 +46,51 @@ class PlanManager:
         self.load()
 
     def load(self):
-        if not self.filepath.exists():
+        try:
+            text = self.filepath.read_text(encoding='utf-8')
+        except FileNotFoundError:
             return
 
-        for idx, line in enumerate(self.filepath.read_text(encoding='utf-8').splitlines(), 1):
+        for idx, line in enumerate(text.splitlines(), 1):
             if not line.strip(): continue
+            try:
+                state, p_str, desc = line.split(maxsplit=2)
+                if state not in ('☐', '☒'): raise ValueError
 
-            parts = line.split(maxsplit=2)
-            if len(parts) != 3 or parts[0] not in ('☐', '☒'):
-                raise OSError(f"malformed line {idx}: expected '☐|☒ <number> <desc>'")
-
-            state_char, path_str, raw_desc = parts
-            path, desc = parse_num(path_str), raw_desc.strip()
-
-            if not desc:
-                raise OSError(f"malformed line {idx}: description cannot be empty")
-
-            if (parent := path[:-1]) and parent not in self.tasks:
-                raise OSError(f"hierarchy broken line {idx}: missing parent '{stringify(parent)}'")
-
-            self.tasks[path] = Task(desc, is_done=(state_char == '☒'))
+                path = parse_num(p_str)
+                self.add_or_replace(path, desc)
+                self.tasks[path].is_done = (state == '☒')
+            except (ValueError, PlanError) as e:
+                raise OSError(f"malformed line {idx} in plan.txt: {e}")
 
     def save(self):
-        lines = [render(path, task) for path, task in sorted(self.tasks.items())]
+        lines = [render(p, t) for p, t in sorted(self.tasks.items())]
         self.filepath.write_text('\n'.join(lines) + '\n' if lines else '', encoding='utf-8')
-
-    def transaction(self, action):
-        """Used only for multi-adds to prevent partial application."""
-        original = self.tasks
-        self.tasks = copy.deepcopy(self.tasks)
-        try:
-            action()
-        except Exception:
-            self.tasks = original
-            raise
 
     def add_or_replace(self, path, desc):
         if not (desc := desc.strip()):
             raise PlanError("task description cannot be empty")
         if (parent := path[:-1]) and parent not in self.tasks:
             raise PlanError(f"parent task '{stringify(parent)}' does not exist")
-        self.tasks[path] = Task(desc, is_done=False)
+        self.tasks[path] = Task(desc)
 
-    def delete(self, target_path):
-        if target_path not in self.tasks:
-            raise PlanError(f"task '{stringify(target_path)}' not found")
-        self.tasks = {p: t for p, t in self.tasks.items() if not is_descendant(target_path, p)}
+    def delete(self, target):
+        if target not in self.tasks:
+            raise PlanError(f"task '{stringify(target)}' not found")
+        self.tasks = {p: t for p, t in self.tasks.items() if not is_descendant(target, p)}
 
-    def set_state(self, target_path, is_done):
-        if target_path not in self.tasks:
-            raise PlanError(f"task '{stringify(target_path)}' not found")
-        self.tasks[target_path].is_done = is_done
+    def set_state(self, target, is_done):
+        if target not in self.tasks:
+            raise PlanError(f"task '{stringify(target)}' not found")
+        self.tasks[target].is_done = is_done
 
-    def display(self, target_path=None):
+    def display(self, target=None):
         visible = sorted(
             (p, t) for p, t in self.tasks.items()
-            if target_path is None or is_descendant(target_path, p)
+            if target is None or is_descendant(target, p)
         )
-        if target_path and not visible:
-            raise PlanError(f"task '{stringify(target_path)}' not found")
+        if target and not visible:
+            raise PlanError(f"task '{stringify(target)}' not found")
         for path, task in visible:
             print(render(path, task))
 
@@ -131,40 +115,43 @@ Commands:
   plan --help             Show this help
 """
 
-def dispatch(plan_file, args):
-    manager = PlanManager(plan_file)
+def dispatch(argv, path):
+    """Core argument interpreter used by both the CLI and the test-suite."""
+    mgr = PlanManager(path)
 
-    match args:
-        case []:
-            manager.display()
-            return
-        case ["--help"]:
-            print(HELP_TEXT, end="")
-            return
-        case ["complete" | "incomplete" as cmd, target]:
-            manager.set_state(parse_num(target), cmd == "complete")
-        case ["delete", target]:
-            manager.delete(parse_num(target))
+    match argv:
+        case []:                         # `plan`
+            mgr.display(); return
+        case ["--help"]:                 # `plan --help`
+            print(HELP_TEXT, end=""); return
+        case ["complete" | "incomplete" as cmd, tgt]:
+            mgr.set_state(parse_num(tgt), cmd == "complete")
+        case ["delete", tgt]:
+            mgr.delete(parse_num(tgt))
         case ["complete" | "incomplete" | "delete" as cmd, *_]:
             raise PlanError(f"'{cmd}' requires exactly 1 argument")
-        case [n] if PATH_RE.match(n):
-            manager.display(parse_num(n))
-            return
-        case _ if len(args) % 2 == 0 and len(args) > 0:
-            pairs = sorted((parse_num(p), d) for p, d in zip(args[::2], args[1::2]))
-            manager.transaction(
-                lambda: [manager.add_or_replace(path, desc) for path, desc in pairs]
-            )
+        case [single]:                   # `plan <n>`
+            mgr.display(parse_num(single)); return
+        case _ if len(argv) % 2 == 0:    # batch upsert pairs
+            pairs = sorted((parse_num(p), d) for p, d in zip(argv[::2], argv[1::2]))
+            backup = mgr.tasks.copy()
+            try:
+                for p, d in pairs:
+                    mgr.add_or_replace(p, d)
+            except Exception:
+                mgr.tasks = backup     # all-or-nothing
+                raise
         case _:
-            raise PlanError(f"unrecognized arguments: '{' '.join(args)}'")
+            raise PlanError(f"unrecognized arguments: '{' '.join(argv)}'")
 
-    manager.save()
+    mgr.save()
 
 def main():
     try:
-        dispatch(Path('~/plan.txt').expanduser(), sys.argv[1:])
+        dispatch(sys.argv[1:], Path('~/plan.txt').expanduser())
     except (PlanError, OSError) as e:
-        sys.exit(f"error: {e}")
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
