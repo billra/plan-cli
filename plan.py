@@ -11,6 +11,26 @@ from pathlib import Path
 
 class PlanError(Exception): pass
 
+# ==========================================
+# Escaping helpers – single source of truth
+# ==========================================
+
+def escape(desc):
+    """
+    Reversible on-disk encoding: backslashes first, then quotes.
+    The order is critical—doing quotes first would immediately
+    create new backslashes that would be re-escaped.
+    """
+    return desc.replace('\\', '\\\\').replace('"', '\\"')
+
+def unescape(raw):
+    """
+    Inverse of escape(): quotes first, then backslashes.
+    Reversing the order guarantees we don’t collapse the
+    backslash that protects a quote we’ve already restored.
+    """
+    return raw.replace('\\"', '"').replace('\\\\', '\\')
+
 
 # ==========================================
 # Data Model & Tuple Utilities
@@ -78,12 +98,12 @@ class PlanManager:
 
             state_char, path_str, raw_desc = match.groups()
             path = parse_num(path_str)
-            desc = raw_desc.replace('\\"', '"').replace('\\\\', '\\').strip()
+            desc = unescape(raw_desc).strip()
 
             if not desc:
                 raise OSError(f"malformed line {idx} in plan.txt: task description cannot be empty")
 
-            # Strict Orphan Validation (Protects against manual file corruption)
+            # Strict orphan validation
             parent_path = get_parent_path(path)
             if parent_path and parent_path not in self.tasks:
                 raise OSError(
@@ -96,11 +116,9 @@ class PlanManager:
     def save(self):
         """Writes the sorted dictionary back to disk."""
         lines = []
-        # Python natively sorts tuples mathematically (e.g., (1, 2) before (1, 10))
         for path, task in sorted(self.tasks.items()):
             state_char = '☒' if task.is_done else '☐'
-            desc_esc = task.desc.replace('\\', '\\\\').replace('"', '\\"')
-            lines.append(f'{state_char} {stringify(path)} "{desc_esc}"')
+            lines.append(f'{state_char} {stringify(path)} "{escape(task.desc)}"')
 
         text = '\n'.join(lines) + '\n' if lines else ''
         self.filepath.write_text(text, encoding='utf-8')
@@ -169,9 +187,7 @@ class PlanManager:
 
         for path, task in visible_tasks:
             state_char = '☒' if task.is_done else '☐'
-            # Apply escaping to match storage formatting
-            desc_esc = task.desc.replace('\\', '\\\\').replace('"', '\\"')
-            print(f'{state_char} {stringify(path)} "{desc_esc}"')
+            print(f'{state_char} {stringify(path)} "{escape(task.desc)}"')
 
 
 # ==========================================
