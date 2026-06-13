@@ -11,20 +11,16 @@ from pathlib import Path
 
 class PlanError(Exception): pass
 
+# Global pattern for validation
+PATH_RE = re.compile(r'^[1-9]\d*(\.[1-9]\d*)*$')
 
 # ==========================================
-# Data Model & Tuple Utilities
+# Tuple Utilities
 # ==========================================
-
-class Task:
-    """A strictly explicit task. No derived state, no child tracking."""
-    def __init__(self, desc, is_done=False):
-        self.desc = desc
-        self.is_done = is_done
 
 def parse_num(s):
     """Validates and converts a dot-separated string into a tuple of integers."""
-    if not re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', s):
+    if not PATH_RE.match(s):
         raise PlanError(
             f"invalid task number format: '{s}' "
             f"(expected positive dot-separated integers like '1' or '1.2')"
@@ -36,15 +32,8 @@ def stringify(tup):
     return '.'.join(map(str, tup))
 
 def is_descendant(target, candidate):
-    """
-    Returns True if the candidate is the target itself or a descendant.
-    Because tuples match exactly by index, prefix slicing is perfectly accurate.
-    """
-    return candidate[:len(target)] == target
-
-def get_parent_path(tup):
-    """Returns the parent tuple, or an empty tuple if it's a root node."""
-    return tup[:-1]
+    """Returns True if the candidate is the target itself or a descendant."""
+    return len(candidate) >= len(target) and candidate[:len(target)] == target
 
 
 # ==========================================
@@ -56,6 +45,7 @@ class PlanManager:
 
     def __init__(self, filepath):
         self.filepath = filepath
+        # Tasks stored as: { path_tuple: {"desc": str, "is_done": bool} }
         self.tasks = {}
         self.load()
 
@@ -64,14 +54,11 @@ class PlanManager:
         if not self.filepath.exists():
             return
 
-        lines = self.filepath.read_text(encoding='utf-8').splitlines()
-        for idx, line in enumerate(lines, 1):
+        for idx, line in enumerate(self.filepath.read_text(encoding='utf-8').splitlines(), 1):
             if not line.strip():
                 continue
 
-            # Split into exactly 3 parts: State, Path, and Description
             parts = line.split(maxsplit=2)
-
             if len(parts) != 3 or parts[0] not in ('☐', '☒'):
                 raise OSError(
                     f"malformed line {idx} in plan.txt: '{line.strip()}' "
@@ -79,8 +66,6 @@ class PlanManager:
                 )
 
             state_char, path_str, raw_desc = parts
-
-            # parse_num validates that the path string is strictly numeric
             path = parse_num(path_str)
             desc = raw_desc.strip()
 
@@ -88,30 +73,24 @@ class PlanManager:
                 raise OSError(f"malformed line {idx} in plan.txt: task description cannot be empty")
 
             # Strict orphan validation
-            parent_path = get_parent_path(path)
-            if parent_path and parent_path not in self.tasks:
+            if (parent := path[:-1]) and parent not in self.tasks:
                 raise OSError(
                     f"hierarchy broken at line {idx} in plan.txt: "
-                    f"parent task '{stringify(parent_path)}' missing for '{stringify(path)}'"
+                    f"parent task '{stringify(parent)}' missing for '{stringify(path)}'"
                 )
 
-            self.tasks[path] = Task(desc=desc, is_done=(state_char == '☒'))
+            self.tasks[path] = {"desc": desc, "is_done": state_char == '☒'}
 
     def save(self):
         """Writes the sorted dictionary back to disk."""
-        lines = []
-        for path, task in sorted(self.tasks.items()):
-            state_char = '☒' if task.is_done else '☐'
-            lines.append(f'{state_char} {stringify(path)} {task.desc}')
-
-        text = '\n'.join(lines) + '\n' if lines else ''
-        self.filepath.write_text(text, encoding='utf-8')
+        lines = [
+            f"{'☒' if task['is_done'] else '☐'} {stringify(path)} {task['desc']}"
+            for path, task in sorted(self.tasks.items())
+        ]
+        self.filepath.write_text('\n'.join(lines) + '\n' if lines else '', encoding='utf-8')
 
     def transaction(self, action):
-        """
-        Wraps operations in an atomic transaction. If validation fails halfway
-        through a batch command, all changes are rolled back to prevent corruption.
-        """
+        """Wraps operations in an atomic transaction."""
         original_tasks = self.tasks
         self.tasks = copy.deepcopy(self.tasks)
         try:
@@ -120,58 +99,45 @@ class PlanManager:
             self.tasks = original_tasks
             raise
 
-    # --- Mutations ---
-
     def add_or_replace(self, path, desc):
-        """
-        Assigns a description to a path. Overwrites existing text and
-        resets the state to incomplete if the path already exists.
-        """
-        desc = desc.strip()
-        if not desc:
+        """Assigns a description to a path, resetting state to incomplete."""
+        if not (desc := desc.strip()):
             raise PlanError("task description cannot be empty")
 
-        parent_path = get_parent_path(path)
-        if parent_path and parent_path not in self.tasks:
-            raise PlanError(
-                f"cannot add '{stringify(path)}': "
-                f"parent task '{stringify(parent_path)}' does not exist"
-            )
+        if (parent := path[:-1]) and parent not in self.tasks:
+            raise PlanError(f"cannot add '{stringify(path)}': parent task '{stringify(parent)}' does not exist")
 
-        self.tasks[path] = Task(desc=desc, is_done=False)
+        self.tasks[path] = {"desc": desc, "is_done": False}
 
     def delete(self, target_path):
-        """Wipes out a task and strictly removes all descendants to prevent orphans."""
+        """Wipes out a task and its descendants."""
         if target_path not in self.tasks:
             raise PlanError(f"task '{stringify(target_path)}' not found")
 
-        to_delete = [
-            path for path in self.tasks
-            if is_descendant(target_path, path)
-        ]
-        for path in to_delete:
-            del self.tasks[path]
+        self.tasks = {
+            path: task for path, task in self.tasks.items()
+            if not is_descendant(target_path, path)
+        }
 
     def set_state(self, target_path, is_done):
-        """Modifies the state of a specific task only (no automagic cascading)."""
+        """Modifies the state of a specific task only."""
         if target_path not in self.tasks:
             raise PlanError(f"task '{stringify(target_path)}' not found")
 
-        self.tasks[target_path].is_done = is_done
+        self.tasks[target_path]["is_done"] = is_done
 
     def display(self, target_path=None):
-        """Prints the tasks in a flat layout, relying on numbers for hierarchy."""
-        visible_tasks = sorted(
+        """Prints the tasks in a flat layout."""
+        visible = sorted(
             (path, task) for path, task in self.tasks.items()
             if target_path is None or is_descendant(target_path, path)
         )
 
-        if target_path and not visible_tasks:
+        if target_path and not visible:
             raise PlanError(f"task '{stringify(target_path)}' not found")
 
-        for path, task in visible_tasks:
-            state_char = '☒' if task.is_done else '☐'
-            print(f'{state_char} {stringify(path)} {task.desc}')
+        for path, task in visible:
+            print(f"{'☒' if task['is_done'] else '☐'} {stringify(path)} {task['desc']}")
 
 
 # ==========================================
@@ -184,11 +150,6 @@ Task Numbering:
   • Use dot-separated integers without leading zeros (e.g., 1, 1.2, 1.2.10).
   • Gaps in numbering are permitted (e.g., 1 and 3 without 2).
   • A parent task must exist before adding a child task.
-
-Task States:
-  • All newly added tasks default to incomplete.
-  • Marking a task as complete or incomplete applies only to that specific task.
-  • Adding or replacing a task sets it to incomplete.
 
 Commands:
   plan                    Show the entire plan.
@@ -206,15 +167,14 @@ def dispatch(plan_file, args):
     match args:
         case []:
             manager.display()
-            return  # Skip saving if we just printed
+            return
 
         case ["--help"]:
             print(HELP_TEXT, end="")
             return
 
         case ["complete" | "incomplete" as cmd, target]:
-            is_done = (cmd == "complete")
-            manager.transaction(lambda: manager.set_state(parse_num(target), is_done))
+            manager.transaction(lambda: manager.set_state(parse_num(target), cmd == "complete"))
 
         case ["delete", target]:
             manager.transaction(lambda: manager.delete(parse_num(target)))
@@ -222,21 +182,18 @@ def dispatch(plan_file, args):
         case ["complete" | "incomplete" | "delete" as cmd, *_]:
             raise PlanError(f"'{cmd}' requires exactly 1 argument: a task number")
 
-        case [n] if re.match(r'^[1-9]\d*(\.[1-9]\d*)*$', n):
+        case [n] if PATH_RE.match(n):
             manager.display(parse_num(n))
-            return  # Skip saving if we just printed
+            return
 
         case _ if len(args) % 2 == 0 and len(args) > 0:
-            # Batch Addition: Map pairs, then sort tuples mathematically so
-            # parents are always constructed before children, preventing false orphans.
-            pairs = [(parse_num(args[i]), args[i+1]) for i in range(0, len(args), 2)]
-            pairs.sort(key=lambda x: x[0])
-
-            def batch_upsert():
-                for path, desc in pairs:
-                    manager.add_or_replace(path, desc)
-
-            manager.transaction(batch_upsert)
+            pairs = sorted(
+                ((parse_num(args[i]), args[i+1]) for i in range(0, len(args), 2)),
+                key=lambda pair: pair[0]
+            )
+            manager.transaction(
+                lambda: [manager.add_or_replace(path, desc) for path, desc in pairs]
+            )
 
         case _:
             raise PlanError(f"unrecognized command or invalid arguments: '{' '.join(args)}'")
