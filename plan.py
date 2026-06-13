@@ -15,6 +15,18 @@ class PlanError(Exception): pass
 PATH_RE = re.compile(r'^[1-9]\d*(\.[1-9]\d*)*$')
 
 # ==========================================
+# Task Object
+# ==========================================
+
+class Task:
+    """A strict task object preventing accidental attribute creation."""
+    __slots__ = ('desc', 'is_done')
+
+    def __init__(self, desc, is_done=False):
+        self.desc = desc
+        self.is_done = is_done
+
+# ==========================================
 # Tuple Utilities
 # ==========================================
 
@@ -45,7 +57,7 @@ class PlanManager:
 
     def __init__(self, filepath):
         self.filepath = filepath
-        # Tasks stored as: { path_tuple: {"desc": str, "is_done": bool} }
+        # Tasks stored as: { path_tuple: Task(desc, is_done) }
         self.tasks = {}
         self.load()
 
@@ -79,12 +91,12 @@ class PlanManager:
                     f"parent task '{stringify(parent)}' missing for '{stringify(path)}'"
                 )
 
-            self.tasks[path] = {"desc": desc, "is_done": state_char == '☒'}
+            self.tasks[path] = Task(desc, is_done=(state_char == '☒'))
 
     def save(self):
         """Writes the sorted dictionary back to disk."""
         lines = [
-            f"{'☒' if task['is_done'] else '☐'} {stringify(path)} {task['desc']}"
+            f"{'☒' if task.is_done else '☐'} {stringify(path)} {task.desc}"
             for path, task in sorted(self.tasks.items())
         ]
         self.filepath.write_text('\n'.join(lines) + '\n' if lines else '', encoding='utf-8')
@@ -107,7 +119,7 @@ class PlanManager:
         if (parent := path[:-1]) and parent not in self.tasks:
             raise PlanError(f"cannot add '{stringify(path)}': parent task '{stringify(parent)}' does not exist")
 
-        self.tasks[path] = {"desc": desc, "is_done": False}
+        self.tasks[path] = Task(desc, is_done=False)
 
     def delete(self, target_path):
         """Wipes out a task and its descendants."""
@@ -124,7 +136,7 @@ class PlanManager:
         if target_path not in self.tasks:
             raise PlanError(f"task '{stringify(target_path)}' not found")
 
-        self.tasks[target_path]["is_done"] = is_done
+        self.tasks[target_path].is_done = is_done
 
     def display(self, target_path=None):
         """Prints the tasks in a flat layout."""
@@ -137,7 +149,7 @@ class PlanManager:
             raise PlanError(f"task '{stringify(target_path)}' not found")
 
         for path, task in visible:
-            print(f"{'☒' if task['is_done'] else '☐'} {stringify(path)} {task['desc']}")
+            print(f"{'☒' if task.is_done else '☐'} {stringify(path)} {task.desc}")
 
 
 # ==========================================
