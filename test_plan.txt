@@ -235,6 +235,34 @@ Editing a parent node must not accidentally orphan or sever its children.
     ☐ 16 New Root
     ☐ 16.1 Safe Child
 
+Out-of-Order Addition & Strict Sorting
+--------------------------------------
+Let's wipe the file clean to test a fresh scenario.
+    >>> _ = plan_file.write_text("", encoding="utf-8")
+
+Because the plan is stored in a dictionary, adding tasks in a completely
+random order must still result in a perfectly sorted output.
+    >>> cmd("add", "30", "Thirty")
+    >>> cmd("add", "10", "Ten")
+    >>> cmd("add", "20", "Twenty")
+    >>> cmd("add", "10.1", "Ten point one")
+    >>> cmd("ls")
+    ☐ 10 Ten
+    ☐ 10.1 Ten point one
+    ☐ 20 Twenty
+    ☐ 30 Thirty
+
+Total Depletion Fallback
+------------------------
+If all tasks are deleted from the file, the application should gracefully return
+to the initial "empty plan" state and show the help text on a blank run.
+    >>> cmd("rm", "10")
+    >>> cmd("rm", "20")
+    >>> cmd("rm", "30")
+    >>> cmd("ls")
+    >>> cmd()
+    plan - A Hierarchical Task Manager...
+
 File Parsing Resilience (Empty Lines & Corruption)
 --------------------------------------------------
 !!! WARNING: Destructive file edits begin here !!!
