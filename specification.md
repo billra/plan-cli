@@ -36,12 +36,25 @@
 
 - `plan` show entire plan, or act like --help if plan is empty
 - `plan ls [id]` show entire plan, or task {id} and its descendants
-- `plan add {id} {text}` add task {id}, error if {id} exists
+- `plan add {id} {text...}` add task {id}
 - `plan rm {id}` remove task {id} and all its descendants
-- `plan edit {id} {new text}` replace description of task {id}, keep state, error if {id} does not exist
+- `plan edit {id} {new text...}` replace description of task {id}, keep state
 - `plan done {id}` mark task {id} complete
 - `plan todo {id}` mark task {id} incomplete
 - `plan --help` show help
+
+### Argument Parsing
+
+`{text...}` (Auto-joining): Task descriptions do not require quotes. All
+arguments provided after the `{id}` are automatically joined with a single
+space. For example, `plan add 1 Buy groceries and cook` is parsed as
+`{id}="1"` and `{text}="Buy groceries and cook"`.
+
+### Error Semantics
+
+- `add`: error if the ID already exists
+- `rm|edit|done|todo|ls <id>`: error if the ID does not exist
+- any other malformed usage gives an error
 
 ## Exit Codes & Errors
 
