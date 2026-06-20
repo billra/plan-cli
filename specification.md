@@ -22,7 +22,7 @@
 - Marking a task complete or incomplete applies only to that specific task, not parents or children.
 - Adding or replacing a task sets it to incomplete (☐).
 
-## Commands
+## Old Commands
 
 - `plan`: Prints the entire plan.
 - `plan <n>`: Prints task `<n>` and its descendants.
@@ -32,6 +32,17 @@
 - `plan incomplete <n>`: Marks task `<n>` incomplete.
 - `plan delete <n>`: Remove task `<n>` and all its descendants.
 - `plan --help`: Prints a synopsis of this specification.
+
+## New Commands
+
+- `plan` show entire plan, or show help if plan is empty
+- `plan ls [id]` show entire plan, or task {id} and its descendants
+- `plan add {id} {text}` add task {id}
+- `plan rm {id}` remove task {id} and all its descendants
+- `plan edit {id} {new text}` replace description of task {id}
+- `plan done {id}` mark task {id} complete
+- `plan todo {id}` mark task {id} incomplete
+- `plan --help` show help
 
 ## Exit Codes & Errors
 
