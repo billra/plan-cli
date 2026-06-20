@@ -58,8 +58,7 @@ class PlanManager:
                 if state not in ('☐', '☒'): raise ValueError
 
                 path = parse_num(p_str)
-                self.add_or_replace(path, desc)
-                self.tasks[path].is_done = (state == '☒')
+                self.tasks[path] = Task(desc, state == '☒')
             except (ValueError, PlanError) as e:
                 raise OSError(f"malformed line {idx} in plan.txt: {e}")
 
@@ -67,14 +66,23 @@ class PlanManager:
         lines = [render(p, t) for p, t in sorted(self.tasks.items())]
         self.filepath.write_text('\n'.join(lines) + '\n' if lines else '', encoding='utf-8')
 
-    def add_or_replace(self, path, desc):
+    def add(self, path, desc):
         if not (desc := desc.strip()):
             raise PlanError("task description cannot be empty")
+        if path in self.tasks:
+            raise PlanError(f"task '{stringify(path)}' already exists")
         if (parent := path[:-1]) and parent not in self.tasks:
             raise PlanError(f"parent task '{stringify(parent)}' does not exist")
         self.tasks[path] = Task(desc)
 
-    def delete(self, target):
+    def edit(self, path, desc):
+        if not (desc := desc.strip()):
+            raise PlanError("task description cannot be empty")
+        if path not in self.tasks:
+            raise PlanError(f"task '{stringify(path)}' not found")
+        self.tasks[path].desc = desc
+
+    def rm(self, target):
         if target not in self.tasks:
             raise PlanError(f"task '{stringify(target)}' not found")
         self.tasks = {p: t for p, t in self.tasks.items() if not is_descendant(target, p)}
@@ -106,13 +114,14 @@ Task Numbering:
   • A parent task must exist before adding a child task.
 
 Commands:
-  plan                    Show the entire plan
-  plan <n>                Show task <n> and descendants
-  plan <n> "<desc>" ...   Add or replace tasks
-  plan complete <n>       Mark task <n> complete
-  plan incomplete <n>     Mark task <n> incomplete
-  plan delete <n>         Remove task <n> and descendants
-  plan --help             Show this help
+  plan                     Show entire plan (or help if empty)
+  plan ls [id]             Show entire plan, or task <id> and descendants
+  plan add <id> <text...>  Add task <id>
+  plan rm <id>             Remove task <id> and descendants
+  plan edit <id> <text...> Replace description of task <id>
+  plan done <id>           Mark task <id> complete
+  plan todo <id>           Mark task <id> incomplete
+  plan --help              Show this help
 """
 
 def dispatch(argv, path):
@@ -120,29 +129,39 @@ def dispatch(argv, path):
     mgr = PlanManager(path)
 
     match argv:
-        case []:                         # `plan`
-            mgr.display(); return
-        case ["--help"]:                 # `plan --help`
-            print(HELP_TEXT, end=""); return
-        case ["complete" | "incomplete" as cmd, tgt]:
-            mgr.set_state(parse_num(tgt), cmd == "complete")
-        case ["delete", tgt]:
-            mgr.delete(parse_num(tgt))
-        case ["complete" | "incomplete" | "delete" as cmd, *_]:
-            raise PlanError(f"'{cmd}' requires exactly 1 argument")
-        case [single]:                   # `plan <n>`
-            mgr.display(parse_num(single)); return
-        case _ if len(argv) % 2 == 0:    # batch upsert pairs
-            pairs = sorted((parse_num(p), d) for p, d in zip(argv[::2], argv[1::2]))
-            backup = mgr.tasks.copy()
-            try:
-                for p, d in pairs:
-                    mgr.add_or_replace(p, d)
-            except Exception:
-                mgr.tasks = backup     # all-or-nothing
-                raise
+        case []:
+            if not mgr.tasks:
+                print(HELP_TEXT, end="")
+            else:
+                mgr.display()
+            return
+        case ["--help"]:
+            print(HELP_TEXT, end="")
+            return
+        case ["ls"]:
+            mgr.display()
+            return
+        case ["ls", tgt]:
+            mgr.display(parse_num(tgt))
+            return
+        case ["add", tgt, *text_parts] if text_parts:
+            mgr.add(parse_num(tgt), " ".join(text_parts))
+        case ["add", *_]:
+            raise PlanError("'add' requires an ID and a description")
+        case ["rm", tgt]:
+            mgr.rm(parse_num(tgt))
+        case ["rm", *_]:
+            raise PlanError("'rm' requires exactly 1 ID argument")
+        case ["edit", tgt, *text_parts] if text_parts:
+            mgr.edit(parse_num(tgt), " ".join(text_parts))
+        case ["edit", *_]:
+            raise PlanError("'edit' requires an ID and a new description")
+        case ["done" | "todo" as cmd, tgt]:
+            mgr.set_state(parse_num(tgt), cmd == "done")
+        case ["done" | "todo" as cmd, *_]:
+            raise PlanError(f"'{cmd}' requires exactly 1 ID argument")
         case _:
-            raise PlanError(f"unrecognized arguments: '{' '.join(argv)}'")
+            raise PlanError(f"unrecognized command or arguments: '{' '.join(argv)}'")
 
     mgr.save()
 
