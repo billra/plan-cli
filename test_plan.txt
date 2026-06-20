@@ -1,85 +1,94 @@
-Plan.py Test Suite (Fixed ID Architecture)
-==========================================
+Plan.py Test Suite (Explicit Command Architecture)
+================================================
 
-Initial State & Lazy File Creation
-----------------------------------
-The file starts out non-existent. Simply displaying the plan should NOT create the file.
+Initial State & Empty Plan Fallback
+-----------------------------------
+The file starts out non-existent. When the plan is empty, running without arguments
+falls back to showing the help text instead of an empty screen.
     >>> plan_file.exists()
     False
     >>> cmd()
+    plan - A Hierarchical Task Manager...
     >>> plan_file.exists()
     False
 
-Tasks can be added. Under the fixed ID model, we don't strictly require starting at 1.
+Tasks can be added using the explicit 'add' command.
 Writing a task triggers the actual file creation.
-    >>> cmd("1", "First Root")
+    >>> cmd("add", "1", "First Root")
     >>> plan_file.exists()
     True
-    >>> cmd()
+    >>> cmd("ls")
     ☐ 1 First Root
 
-Atomic Addition & Order Independence
-------------------------------------
-Because `add_or_replace` internally sorts tuples before processing, we should be able to
-define a valid tree in a completely random order, and it will construct properly without
-throwing orphan errors.
-    >>> cmd("2.1.1", "Leaf", "2", "Root", "2.1", "Branch")
-    >>> cmd("2")
-    ☐ 2 Root
-    ☐ 2.1 Branch
-    ☐ 2.1.1 Leaf
+Auto-joining Descriptions & Whitespace
+--------------------------------------
+The 'add' and 'edit' commands automatically join multiple text arguments with a space.
+Leading and trailing spaces are silently stripped. Empty descriptions are rejected.
+    >>> cmd("add", "2", "Root", "Task", "with", "multiple", "words")
+    >>> cmd("add", "2.1", "  Spaces Stripped  ")
+    >>> cmd("ls", "2")
+    ☐ 2 Root Task with multiple words
+    ☐ 2.1 Spaces Stripped
 
-Orphan Validation
------------------
+    >>> cmd("add", "2.2")
+    PlanError: ...
+    >>> cmd("add", "2.2", "   ")
+    PlanError: ...
+
+Duplicate ID & Orphan Validation
+--------------------------------
+Adding an ID that already exists fails.
+    >>> cmd("add", "1", "Duplicate")
+    PlanError: ...
+
 Adding a task missing its immediate parent fails validation.
-    >>> cmd("3.1", "Orphan")
+    >>> cmd("add", "3.1", "Orphan")
+    PlanError: ...
+    >>> cmd("add", "2.3.1", "Deep Orphan")
     PlanError: ...
 
-    >>> cmd("2.2.1", "Deep Orphan")
-    PlanError: ...
-
-Gaps Are Completely Legal
--------------------------
-Unlike the old model, jumping from 1 to 5, or 2.1 to 2.9, is perfectly fine.
-    >>> cmd("5", "Far Root", "2.9", "Far Branch")
-    >>> cmd()
+Sequential Addition & Gaps
+--------------------------
+Gaps are completely legal (e.g., jumping from 1 to 5).
+    >>> cmd("add", "2.1.1", "Leaf")
+    >>> cmd("add", "5", "Far Root")
+    >>> cmd("add", "2.9", "Far Branch")
+    >>> cmd("ls")
     ☐ 1 First Root
-    ☐ 2 Root
-    ☐ 2.1 Branch
+    ☐ 2 Root Task with multiple words
+    ☐ 2.1 Spaces Stripped
     ☐ 2.1.1 Leaf
     ☐ 2.9 Far Branch
     ☐ 5 Far Root
 
-If a batch contains an invalid operation (like an orphan), the entire command aborts atomically.
-    >>> cmd("2.2", "Valid", "4.1", "Invalid Orphan")
-    PlanError: ...
-
-Upserts & Overwrites
---------------------
-Replacing an existing task updates its description AND forces its state to incomplete.
-Because state is decoupled, this does NOT bubble up or down.
-    >>> cmd("complete", "2.1")
-    >>> cmd("2.1", "Updated Branch")
-    >>> cmd("2")
-    ☐ 2 Root
-    ☐ 2.1 Updated Branch
+Editing Tasks (State Preservation)
+----------------------------------
+Editing an existing task updates its description. Unlike the old 'upsert' model,
+'edit' requires the ID to exist and preserves the current done/todo state.
+    >>> cmd("done", "2.1")
+    >>> cmd("edit", "2.1", "Updated", "Branch")
+    >>> cmd("ls", "2.1")
+    ☒ 2.1 Updated Branch
     ☐ 2.1.1 Leaf
-    ☐ 2.9 Far Branch
+
+    >>> cmd("edit", "9.9", "Ghost Task")
+    PlanError: ...
 
 Decoupled State (No Automagic)
 ------------------------------
 Tasks are independent. Completing a parent does NOT complete its children.
-    >>> cmd("complete", "2")
-    >>> cmd("2")
-    ☒ 2 Root
-    ☐ 2.1 Updated Branch
+    >>> cmd("done", "2")
+    >>> cmd("ls", "2")
+    ☒ 2 Root Task with multiple words
+    ☒ 2.1 Updated Branch
     ☐ 2.1.1 Leaf
     ☐ 2.9 Far Branch
 
 Completing a child does NOT dynamically complete the parent.
-    >>> cmd("complete", "2.1.1")
-    >>> cmd("2")
-    ☒ 2 Root
+    >>> cmd("done", "2.1.1")
+    >>> cmd("todo", "2.1")
+    >>> cmd("ls", "2")
+    ☒ 2 Root Task with multiple words
     ☐ 2.1 Updated Branch
     ☒ 2.1.1 Leaf
     ☐ 2.9 Far Branch
@@ -87,97 +96,71 @@ Completing a child does NOT dynamically complete the parent.
 Structural Deletion (Subtree Wiping)
 ------------------------------------
 Deleting a node wipes out that node and all of its descendants, to prevent orphans.
-Deleting 2.1 should wipe 2.1 and 2.1.1, leaving 2 and 2.9 alone. It does not shift 2.9!
-    >>> cmd("delete", "2.1")
-    >>> cmd("2")
-    ☒ 2 Root
+Deleting 2.1 should wipe 2.1 and 2.1.1, leaving 2 and 2.9 alone.
+    >>> cmd("rm", "2.1")
+    >>> cmd("ls", "2")
+    ☒ 2 Root Task with multiple words
     ☐ 2.9 Far Branch
 
 Deleting the root 2 wipes the rest of that tree.
-    >>> cmd("delete", "2")
-    >>> cmd()
+    >>> cmd("rm", "2")
+    >>> cmd("ls")
     ☐ 1 First Root
     ☐ 5 Far Root
-
-Attempting to add a child to a deleted parent fails.
-    >>> cmd("2.1", "Zombie Child")
-    PlanError: ...
-
-Whitespace Stripping & Formatting
----------------------------------
-Because shell quoting is handled externally, quotes and backslashes display as literal characters.
-Leading and trailing whitespace must be silently stripped. Completely empty descriptions
-(or strings containing only spaces) are rejected.
-    >>> cmd("6", 'Has "quotes" and \\slashes', "6.1", "  Spaces Stripped  ")
-    >>> cmd("6")
-    ☐ 6 Has "quotes" and \slashes
-    ☐ 6.1 Spaces Stripped
-
-    >>> cmd("6.2", "")
-    PlanError: ...
-
-    >>> cmd("6.2", "   ")
-    PlanError: ...
 
 Target Missing Errors
 ---------------------
 Attempting to operate on non-existent targets safely throws validation errors.
-    >>> cmd("complete", "9.9")
+    >>> cmd("done", "9.9")
     PlanError: ...
-
-    >>> cmd("delete", "9.9")
+    >>> cmd("todo", "9.9")
+    PlanError: ...
+    >>> cmd("rm", "9.9")
+    PlanError: ...
+    >>> cmd("ls", "9.9")
     PlanError: ...
 
 Invalid Number Parsing (Strict Regex)
 -------------------------------------
-The `parse_num` regex requires strict dot-separated integers.
-No leading or trailing dots:
-    >>> cmd("delete", "1.")
+The parser requires strict dot-separated integers. No leading/trailing dots or symbols.
+    >>> cmd("rm", "1.")
     PlanError: ...
-    >>> cmd("delete", ".1")
+    >>> cmd("rm", ".1")
     PlanError: ...
-
-No letters or symbols:
-    >>> cmd("delete", "A.1")
+    >>> cmd("rm", "A.1")
     PlanError: ...
-
-No zeros or leading zeros:
-    >>> cmd("delete", "0")
+    >>> cmd("rm", "0")
     PlanError: ...
-    >>> cmd("delete", "1.0")
-    PlanError: ...
-    >>> cmd("delete", "01.2")
+    >>> cmd("rm", "1.0")
     PlanError: ...
 
 Multi-Digit & Deep Nesting Numbering
 ------------------------------------
-Tuples must sort mathematically, not lexical sorting (e.g., 20.300 comes after 20.9).
-    >>> cmd("20", "Twenty", "20.9", "Nine", "20.300", "Three Hundred")
-    >>> cmd("20")
+Tuples must sort mathematically, not lexically (e.g., 20.300 comes after 20.9).
+    >>> cmd("add", "20", "Twenty")
+    >>> cmd("add", "20.9", "Nine")
+    >>> cmd("add", "20.300", "Three Hundred")
+    >>> cmd("ls", "20")
     ☐ 20 Twenty
     ☐ 20.9 Nine
     ☐ 20.300 Three Hundred
 
-Targeted Display Filtering
---------------------------
-Ensure targeting a sub-branch strictly prints ONLY that branch and nothing above or beside it.
-    >>> cmd("20.9")
-    ☐ 20.9 Nine
-
-CLI Dispatch: Argument Count Mismatches
----------------------------------------
-Batch upsert requires pairs. An odd number of arguments triggers the fallback error.
-    >>> cmd("8", "Valid", "9")
-    PlanError: ...
-
+CLI Dispatch: Argument Validation
+---------------------------------
 Commands requiring exactly one argument fail safely if given zero or multiple.
-    >>> cmd("complete")
+    >>> cmd("rm")
     PlanError: ...
-    >>> cmd("delete", "1", "2")
+    >>> cmd("rm", "1", "2")
+    PlanError: ...
+    >>> cmd("done")
+    PlanError: ...
+    >>> cmd("todo", "1", "extra")
     PlanError: ...
 
-CLI Dispatch: Unrecognized Commands
------------------------------------
+Commands requiring ID + text fail if text is omitted.
+    >>> cmd("edit", "1")
+    PlanError: ...
+
 Arbitrary strings are caught and rejected gracefully.
     >>> cmd("magic", "1")
     PlanError: ...
@@ -188,27 +171,92 @@ Running help should print the text but should NOT wipe or overwrite the plan fil
     >>> cmd("--help")
     plan - A Hierarchical Task Manager...
 
+Deep Hierarchy Lifecycle & ID Reincarnation
+-------------------------------------------
+Testing a long chain of events on a deep hierarchy to ensure state doesn't leak.
+    >>> cmd("add", "10", "Deep Root")
+    >>> cmd("add", "10.1", "Child")
+    >>> cmd("add", "10.1.1", "Grandchild")
+    >>> cmd("done", "10.1.1")
+    >>> cmd("rm", "10.1")
+
+After removing the middle child, the root should remain, but the grandchild is wiped.
+    >>> cmd("ls", "10")
+    ☐ 10 Deep Root
+
+Re-adding a previously deleted ID should work perfectly and default to incomplete (☐).
+    >>> cmd("add", "10.1", "Reincarnated Child")
+    >>> cmd("ls", "10")
+    ☐ 10 Deep Root
+    ☐ 10.1 Reincarnated Child
+
+Unicode & Special Characters
+----------------------------
+Because files are forced to UTF-8, emojis and non-Latin characters parse safely.
+    >>> cmd("add", "11", "Buy groceries 🍎, 🍞, 🍷")
+    >>> cmd("add", "11.1", "日本語のテスト (Japanese text test)")
+    >>> cmd("ls", "11")
+    ☐ 11 Buy groceries 🍎, 🍞, 🍷
+    ☐ 11.1 日本語のテスト (Japanese text test)
+
+Duplicate Descriptions
+----------------------
+Task descriptions do not need to be unique. Only the IDs act as primary keys.
+    >>> cmd("add", "12", "Check emails")
+    >>> cmd("add", "13", "Check emails")
+    >>> cmd("ls", "12")
+    ☐ 12 Check emails
+    >>> cmd("ls", "13")
+    ☐ 13 Check emails
+
+Command Case-Sensitivity & Malformed IDs
+----------------------------------------
+Commands must be strictly lowercase.
+    >>> cmd("ADD", "14", "Test")
+    PlanError: ...
+    >>> cmd("Done", "12")
+    PlanError: ...
+
+ID parsing naturally tolerates spaces but rejects double-dots.
+    >>> cmd("add", "15", "Parent for padded ID")
+    >>> cmd("add", " 15.1 ", "Padded ID")
+    >>> cmd("ls", "15.1")
+    ☐ 15.1 Padded ID
+    >>> cmd("add", "15..2", "Double dot")
+    PlanError: ...
+
+Editing the Root
+----------------
+Editing a parent node must not accidentally orphan or sever its children.
+    >>> cmd("add", "16", "Old Root")
+    >>> cmd("add", "16.1", "Safe Child")
+    >>> cmd("edit", "16", "New Root")
+    >>> cmd("ls", "16")
+    ☐ 16 New Root
+    ☐ 16.1 Safe Child
+
 File Parsing Resilience (Empty Lines & Corruption)
 --------------------------------------------------
+!!! WARNING: Destructive file edits begin here !!!
 The tool safely ignores empty lines in the storage file.
     >>> _ = plan_file.write_text("\n\n☐ 1 Surviving Task\n\n\n", encoding="utf-8")
-    >>> cmd()
+    >>> cmd("ls")
     ☐ 1 Surviving Task
 
-If a user manually corrupts the file with malformed text (like an invalid state char), the tool aborts to protect data.
+If a user manually corrupts the file with malformed text, the tool aborts to protect data.
     >>> _ = plan_file.write_text("? 1 Invalid State Character\n", encoding="utf-8")
-    >>> cmd()
+    >>> cmd("ls")
     OSError: ...
 
 If a file contains a record where the description parses to empty, it aborts.
     >>> _ = plan_file.write_text("☐ 1    \n", encoding="utf-8")
-    >>> cmd()
+    >>> cmd("ls")
     OSError: ...
 
 File Load Validation (Orphans)
 ------------------------------
-If a user manually created an orphan in the text file, the loader must catch it and abort.
+If a user manually creates an orphan in the text file, the loader must catch it and abort.
 Notice 1.2.1 is missing its required parent 1.2.
     >>> _ = plan_file.write_text("☐ 1 Root\n☐ 1.2.1 Orphan\n", encoding="utf-8")
-    >>> cmd()
+    >>> cmd("ls")
     OSError: ...

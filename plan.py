@@ -58,6 +58,11 @@ class PlanManager:
                 if state not in ('☐', '☒'): raise ValueError
 
                 path = parse_num(p_str)
+
+                # Check for orphans during file load
+                if (parent := path[:-1]) and parent not in self.tasks:
+                    raise PlanError(f"parent task '{stringify(parent)}' does not exist")
+
                 self.tasks[path] = Task(desc, state == '☒')
             except (ValueError, PlanError) as e:
                 raise OSError(f"malformed line {idx} in plan.txt: {e}")
