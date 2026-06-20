@@ -4,8 +4,7 @@
 
 - File Path: `~/plan.txt` (UTF-8 encoding).
 - Initialization: Created on the first write operation if it does not exist.
-- Line Format: `☐|☒ <number> "<description>"\n`
-- Escaping: Double quotes (`"`) and backslashes (`\`) must be escaped as `\"` and `\\`.
+- Line Format: `☐|☒ <number> <description>\n`
 - Ordering: Lines are maintained in ascending numeric order.
 - Visuals: Hierarchy is conveyed by numbering and Unicode checkboxes (☐ and ☒).
 - Empty Lines: Whitespace-only lines are ignored during parsing.
@@ -35,11 +34,11 @@
 
 ## New Commands
 
-- `plan` show entire plan, or show help if plan is empty
+- `plan` show entire plan, or act like --help if plan is empty
 - `plan ls [id]` show entire plan, or task {id} and its descendants
-- `plan add {id} {text}` add task {id}
+- `plan add {id} {text}` add task {id}, error if {id} exists
 - `plan rm {id}` remove task {id} and all its descendants
-- `plan edit {id} {new text}` replace description of task {id}
+- `plan edit {id} {new text}` replace description of task {id}, keep state, error if {id} does not exist
 - `plan done {id}` mark task {id} complete
 - `plan todo {id}` mark task {id} incomplete
 - `plan --help` show help
