@@ -53,6 +53,34 @@ seamlessly across different agent frameworks:
   plan --help                Show help
 ```
 
+### Why These Verbs?
+
+We deliberately keep the verb set small, unambiguous, and rooted in
+long-standing Unix muscle memory.  The goal is to minimize the token-level
+"search space" an agent must explore when deciding which action to invoke, while
+still feeling instantly familiar to a human operator.
+
+- `ls`: Decades-old shorthand for "list."  Nearly every shell user (and thus
+  every shell-trained LLM) associates it with "show me the current contents."
+- `add`: The most concise, self-describing word for "create a new item."
+  Alternatives such as `create` or `new` are longer and introduce synonym drift.
+- `rm`: Another canonical Unix verb.  It conveys destructive intent without
+  needing an extra flag (compare `delete`, `del`, or `remove`).
+- `edit`: Chosen over `update` or `modify` because it implies "replace the
+  free-form text" rather than performing a partial patch.
+- `done`: A single-token, affirmative state change that cannot be confused with deletion.
+- `todo`: The symmetric inverse of `done`, again a single token and a concept
+  every issue tracker uses. Explicitly did not choose `undo` as it has an
+  entirely different meaning.
+- Bare command (`plan`): Mirrors the `git` pattern where running the tool with
+  no subcommand shows a high-level status overview.
+
+Each verb has:
+
+1. A **single, precise meaning** (no overloading).
+2. A **short, low-entropy token count**, reducing the chance of LLM hallucination.
+3. **Parity with common shell commands**, capitalizing on existing human and agent training data.
+
 ## Example Agent Workflow
 
 Imagine a CLI agent tasked with setting up a local web application. Instead of
