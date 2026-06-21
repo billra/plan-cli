@@ -119,14 +119,14 @@ Task Numbering:
   • A parent task must exist before adding a child task.
 
 Commands:
-  plan                     Show entire plan (or help if empty)
-  plan ls [id]             Show entire plan, or task <id> and descendants
-  plan add <id> <text...>  Add task <id>
-  plan rm <id>             Remove task <id> and descendants
-  plan edit <id> <text...> Replace description of task <id>
-  plan done <id>           Mark task <id> complete
-  plan todo <id>           Mark task <id> incomplete
-  plan --help              Show this help
+  plan                       Show entire plan (or help if empty)
+  plan ls [<id>]             Show entire plan, or task <id> and its descendants
+  plan add <id> <text...>    Add task <id> (quotes not required for text)
+  plan rm <id>               Remove task <id> and all its descendants
+  plan edit <id> <text...>   Replace description of task <id>, keeping current state
+  plan done <id>             Mark task <id> complete
+  plan todo <id>             Mark task <id> incomplete
+  plan --help                Show this help
 """
 
 def dispatch(argv, path):
